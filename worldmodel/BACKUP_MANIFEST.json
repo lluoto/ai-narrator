@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "description": "Partial worldmodel source, policy, and prompt backup. Hashes are SHA-256 values of source bytes.",
+  "files": [
+    {
+      "path": "worker_config.json",
+      "original_worldmodel_relative_path": "worker_config.json",
+      "sha256": "b892fc1a6cf9b26b3d14634c0d2da6f7f0dfd1eaf5f42ec8876b108ec0410757"
+    },
+    {
+      "path": "QWEN_TASK_ROUTING_POLICY.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/QWEN_TASK_ROUTING_POLICY.md",
+      "sha256": "669d8de4e4d6bf9521fb1ee1486b25d0cecf0ce840c235e5ef3ac3d65a2a50a0"
+    },
+    {
+      "path": "tools/proposition_canary_run.py",
+      "original_worldmodel_relative_path": "tools/proposition_canary_run.py",
+      "sha256": "34ab39267ee9ee694973ff9ae0b116bf02f6eb4c3099a2d89b30ade2030bb5af"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/run_wavea_canary_batch.py",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/run_wavea_canary_batch.py",
+      "sha256": "27d87dda14f404e635a433fd8f0a64ce78bd8f58b241444155b39f125c37eae1"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_8000_phase_a_structured_proposal_batch.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_8000_phase_a_structured_proposal_batch.md",
+      "sha256": "903a70814da5a703d578223708cad22493dac971861d0c03baca500223b6b368"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_dual_endpoint_prompt_contract_20261010.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_dual_endpoint_prompt_contract_20261010.md",
+      "sha256": "00c116fd3020f334affba0a6a316599c1c8f3f3655fba71a01275091510f20dd"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_rare_route_delegated_baseline_prompt.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_rare_route_delegated_baseline_prompt.md",
+      "sha256": "3082d8e04f589c685f3ed9028bc9b41227dc48c53f2d3e12e2f2e0d1977f9e39"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_regression_8000/bounded_event_slot_prompt_v6.txt",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_regression_8000/bounded_event_slot_prompt_v6.txt",
+      "sha256": "153a9691a1609a74125c92a28234a4b1ab73c3721ea09e27293acf454bd8b719"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/report.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/report.md",
+      "sha256": "db355ca00d8e6c62a2d771a01725574d847e4489b9c40d5a6f0a34380b7a0908"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/job_record.json",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/job_record.json",
+      "sha256": "105f5d3163758db5715fcc8bda86fe630c3eceef3ea6a30fbf97346238abff41"
+    }
+  ],
+  "exclusions": [
+    "novels",
+    "raw source corpus",
+    "coverage partitions",
+    "raw completions",
+    "route queue outputs",
+    "reviewed receipts",
+    "binding indexes"
+  ]
+}

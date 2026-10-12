@@ -1,0 +1,54 @@
+{
+  "chat_completions_url": "http://localhost:8000/v1/chat/completions",
+  "chat_model": "/scratch/yl15858/qwen/Qwen3-27B",
+  "chat_api_key_env": "LLM_API_KEY",
+  "embedding_url": "http://localhost:8001/v1/embeddings",
+  "embedding_model": "/scratch/yl15858/llm/qwen3-embedding-8b",
+  "embedding_service_status": "stopped_reassigned_to_analysis_server",
+  "embedding_service_note": "Per handoff_full_corpus_embedding_to_qwen_phase_switch.md the embedding GPU was reassigned to Qwen3-27B; port 8001 now serves the long-context analysis profile, not embeddings.",
+  "routing_policy": "runs/_extraction_scheduler/20260924/QWEN_TASK_ROUTING_POLICY.md",
+  "profiles": {
+    "structured_source": {
+      "tool_class": "d01 discovery, d02 review, schema repair, rule extraction",
+      "endpoint": "http://localhost:8000/v1/chat/completions",
+      "model": "/scratch/yl15858/qwen/Qwen3-27B",
+      "api_key_env": "LLM_API_KEY",
+      "thinking_disabled": true,
+      "output_contract": "strict_json",
+      "max_model_len": 8192,
+      "max_tokens": 1500,
+      "max_tokens_escalated": 2000,
+      "max_num_seqs": 1
+    },
+    "structured_render": {
+      "tool_class": "approved decisions rendered into a schema",
+      "endpoint": "http://localhost:8000/v1/chat/completions",
+      "model": "/scratch/yl15858/qwen/Qwen3-27B",
+      "api_key_env": "LLM_API_KEY",
+      "thinking_disabled": true,
+      "output_contract": "strict_json",
+      "max_model_len": 8192,
+      "max_tokens": 1500,
+      "max_tokens_escalated": 2000,
+      "max_num_seqs": 1
+    },
+    "unstructured_analysis": {
+      "tool_class": "algorithm diagnosis, design analysis, incident analysis, non-binding research",
+      "endpoint": "http://localhost:8001/v1/chat/completions",
+      "model": "/scratch/yl15858/qwen/Qwen3-27B",
+      "api_key_env": "LLM_API_KEY",
+      "thinking_disabled": false,
+      "output_contract": "markdown_prose",
+      "max_model_len": 32768,
+      "max_tokens": null,
+      "max_num_seqs": 1,
+      "server_max_num_seqs": 8,
+      "note": "Verified :8001 /v1/models identity is /scratch/yl15858/qwen/Qwen3-27B; server capability is 32768 ctx / 8 seq (2026-10-03). Policy validation limit is max_num_seqs=1 until a GPU/KV smoke authorizes more."
+    },
+    "human_escalation": {
+      "tool_class": "ambiguous source, policy judgment, publication, threshold decision",
+      "automatic_model_decision": false,
+      "output_contract": "human_label_or_decision"
+    }
+  }
+}

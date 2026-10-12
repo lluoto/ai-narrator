@@ -1,0 +1,127 @@
+{
+  "job_id": "slot_pilot_v6_smoke_8000_structured_source",
+  "created_at": "2026-10-10T07:04:58.382899+00:00",
+  "execution_mode": "structured_source",
+  "result_class": "isolated_proposal_smoke_only",
+  "status": "completed_proposal_smoke_only",
+  "input_artifact_hashes": {
+    "worker_config.json": "76b46ca7cc161fcd04d8745669b76fcc511379abac31651122d846f03bf0aa9e",
+    "QWEN_TASK_ROUTING_POLICY.md": "669d8de4e4d6bf9521fb1ee1486b25d0cecf0ce840c235e5ef3ac3d65a2a50a0",
+    "slot_pilot_v2/bounded_event_queue.jsonl": "168a2eeb8ebc50c30d90186848dd528e910209794ac08de8c1cb3b8de9111c70",
+    "slot_pilot_v2_entity_supplement/entity_profile_queue.jsonl": "b4f334c2df3f19d46e1946891f92e03d9e3e67a60fe7ec1755b77933667f892f",
+    "bounded_event_slot_prompt_v6.txt": "153a9691a1609a74125c92a28234a4b1ab73c3721ea09e27293acf454bd8b719",
+    "entity_profile_slot_prompt_v3.txt": "81a9f325203119ea1dd1843c791c36da9420186262d9f9cd28b512c860acd889",
+    "slot_post_lints_v2.py": "266f47c0316358335d136e3a19429a367ad6f18b653f25f4ad7b2c4d514824be",
+    "slot_post_lints_v3.py": "5ef67b2ae5cb05b50de8c17d31b3b8c8b30a18e75eff647689e46a2a95c63381",
+    "slot_pilot_v4_smoke_8001/selection_manifest.json": "c43edb43676f54cd83753ac1c671d36cf1d7ce10f912eb029972999365235870",
+    "slot_pilot_v5_smoke_8000_structured_source/selection_manifest.json": "9ecf00c01c983ff8daf211b03128e468c4ad96e42fb1a550199f3066f5c95b27",
+    "slot_pilot_v5_smoke_8000_structured_source/lint_report.json": "bb2a6d20e89680a30e18b0c349194683955a87ff094a56263be79d7b578752c4",
+    "run_v6_smoke.py": "37914a39e4ee7a9d0e38e0fa08730d47dfcbfb83f1d5fd6b5960e85ea2ab9f2b",
+    "slot_post_lints_v6_smoke_8000_structured_source.py": "99c8534e7f05aa74703f7d238a58ca5ab6c2c4006b6a6e244147bf85a71f0e62"
+  },
+  "endpoint": "http://localhost:8000/v1/chat/completions",
+  "model": "/scratch/yl15858/qwen/Qwen3-27B",
+  "thinking_disabled": true,
+  "max_model_len": 8192,
+  "max_tokens": 1500,
+  "max_num_seqs": 1,
+  "model_health": {
+    "checked_at": "2026-10-10T07:04:49.706902+00:00",
+    "endpoint": "http://localhost:8000/v1/models",
+    "http_status": 200,
+    "returned_model_ids": [
+      "/scratch/yl15858/qwen/Qwen3-27B"
+    ],
+    "selected_model_id": "/scratch/yl15858/qwen/Qwen3-27B",
+    "response_sha256": "4b50cb2d9ff1c3db4e2339e13994f7d23cf8bf1fc5120a876aaf9f207900f412"
+  },
+  "request_body_settings": {
+    "model": "/scratch/yl15858/qwen/Qwen3-27B",
+    "temperature": 0,
+    "max_tokens": 1500,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "messages": [
+      {
+        "role": "system",
+        "content_source": "route prompt [SYSTEM]"
+      },
+      {
+        "role": "user",
+        "content_source": "route prompt [USER] rendered with frozen target"
+      }
+    ]
+  },
+  "dispatch": {
+    "serial": true,
+    "calls_per_item": 1,
+    "retries": 0,
+    "total_items": 10,
+    "total_calls": 10
+  },
+  "raw_capture_directory": "raw_captures",
+  "validation_before_lint": {
+    "checks": {
+      "exactly_10_expected_records": true,
+      "five_records_per_route": {
+        "bounded_event": true,
+        "entity_profile": true
+      },
+      "required_bounded_event_targets_present": true,
+      "additional_selections_v4_v5_distinct_where_available": true,
+      "serial_dispatch": true,
+      "one_call_per_item_no_retry": true,
+      "raw_capture_per_item": true,
+      "all_http_200": true,
+      "all_stop_finish": true,
+      "all_json_parsed": true,
+      "all_schema_valid": true,
+      "all_response_models_match_required_model": true,
+      "no_independent_verifier_call": true,
+      "no_8001_call": true
+    },
+    "transport_schema_by_route": {
+      "bounded_event": {
+        "records": 5,
+        "http_status_counts": {
+          "200": 5
+        },
+        "transport_failures": 0,
+        "finish_reason_counts": {
+          "stop": 5
+        },
+        "json_parsed_records": 5,
+        "schema_valid_records": 5,
+        "schema_invalid_records": 0
+      },
+      "entity_profile": {
+        "records": 5,
+        "http_status_counts": {
+          "200": 5
+        },
+        "transport_failures": 0,
+        "finish_reason_counts": {
+          "stop": 5
+        },
+        "json_parsed_records": 5,
+        "schema_valid_records": 5,
+        "schema_invalid_records": 0
+      }
+    }
+  },
+  "verifier": {
+    "independent_verifier_call_made": false,
+    "8001_call_made": false
+  },
+  "boundaries": {
+    "publication_status": "candidate_not_confirmed",
+    "transfer_policy": "no_transfer",
+    "candidate_promotion": false,
+    "independent_verification": false,
+    "full_batch_dispatched": false,
+    "runtime_state_mutation": false,
+    "source_queue_mutation": false
+  },
+  "gate": "proposal smoke only unless independently verified"
+}
