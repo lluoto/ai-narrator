@@ -13,6 +13,7 @@ const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 64, temperature: 0,
 };
+const TRANSIENT_RUNTIME = { careerEntryPersistence: "transient" } as const;
 
 type S = {
   round: number;
@@ -22,7 +23,7 @@ type S = {
 };
 
 async function arena() {
-  const s = new GameSession(`eco-clock-${Math.random()}`, "cosmic-horror", CFG) as unknown as S;
+  const s = new GameSession(`eco-clock-${Math.random()}`, "cosmic-horror", CFG, undefined, undefined, undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME) as unknown as S;
   await s.act("创建角色 investigator 甲"); // round=1
   return s;
 }

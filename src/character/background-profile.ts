@@ -6,6 +6,7 @@
 
 import type { CharacterArchetype } from "./character-factory";
 import type { BackgroundProfile } from "./coc-character";
+import { drawRandomUnit, type RandomUnit } from "./random-unit";
 
 // ============================================================
 // 随机人名池（1920s 美式音译名 + 姓氏）
@@ -53,8 +54,8 @@ const OCCUPATION_FIRST_NAMES: Record<string, string[]> = {
   driver: ["伦纳德", "维克托", "斯坦利", "埃德温", "米尔德丽德"],
 };
 
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+function pick<T>(arr: T[], randomUnit: RandomUnit = Math.random): T {
+  return arr[Math.floor(drawRandomUnit(randomUnit) * arr.length)];
 }
 
 export type Gender = "male" | "female";
@@ -115,13 +116,13 @@ const PROFILE_POOLS: Record<string, OccupationProfileTemplates> = {
   detective: {
     appearance: [
       "瘦高的身形裹在灰呢大衣里，帽子压得很低，手上常年有烟渍。",
-      "中等身材，目光锐利而疲惫，嘴角一道旧疤让他看起来比实际年龄更老。",
+      "中等身材，目光锐利而疲惫，嘴角一道旧疤让人看起来比实际年龄更老。",
       "衣着整洁但旧，大衣袖口磨得发亮，走路时习惯贴着墙根。",
     ],
-    beliefs: ["只信证据，不信巧合。每桩案子背后都有人，只是还没找到。", "世界是按规矩运转的——规矩被打破的地方，就是他要站的地方。", "人都会说谎，证据不会。这是他从警局学到的最重要一课。"],
-    significantPeople: ["当年的搭档，在他离开警局时还替他扛过一次处分。", "常光顾的当铺老板，消息灵通，从不问多余的问题。", "妹妹——她已经三年没回信了，但他一直留着她的信。"],
-    meaningfulPlace: ["警局的审讯室，光线刺眼，他在那里听过无数种谎言。", "码头区一家快打烊的咖啡馆，他习惯在那里复盘卷宗。", "老家那座废弃的火车站，少年时代他常去那里发呆。"],
-    treasuredPossession: ["父亲留下的怀表，指针早就不走了，但他一直带着。", "一本贴满剪报的笔记本，记着他经手过的每桩案子。", "一枚旧警徽，离职时他没有上交。"],
+    beliefs: ["只信证据，不信巧合。每桩案子背后都有人，只是还没找到。", "世界是按规矩运转的——规矩被打破的地方，就是该去的地方。", "人都会说谎，证据不会。这是从警局学到的最重要一课。"],
+    significantPeople: ["当年的搭档，离开警局时还替人扛过一次处分。", "常光顾的当铺老板，消息灵通，从不问多余的问题。", "妹妹——她已经三年没回信了，但一直留着她的信。"],
+    meaningfulPlace: ["警局的审讯室，光线刺眼，曾在那里听过无数种谎言。", "码头区一家快打烊的咖啡馆，习惯在那里复盘卷宗。", "老家那座废弃的火车站，少年时代常去那里发呆。"],
+    treasuredPossession: ["父亲留下的怀表，指针早已停摆。", "一本贴满剪报的笔记本，记着经手过的每桩案子。", "一枚旧警徽，离职时没有上交。"],
     traits: ["沉默寡言，观察入微，惯独自行动。", "戒心重，但认定的人会毫无保留。", "耐心极好，能盯一个目标一整天。"],
     woundsAndScars: ["左肩的旧枪伤，阴雨天就隐隐作痛。", "右手两根手指曾被门夹断过，接回后有些不听使唤。", "一道从左眉延伸到颧骨的疤痕，是某次追捕时留下的。"],
     phobiasAndManias: ["恐高，但从不承认。", "对被人跟踪有近乎偏执的警觉——总会反复确认身后没人。", "一旦开始调查某个细节，就停不下来，直到挖出真相。"],
@@ -132,22 +133,22 @@ const PROFILE_POOLS: Record<string, OccupationProfileTemplates> = {
       "身形微胖，面容和善，但看人的时候像在诊断。",
       "头发梳得一丝不苟，袖口永远挽到小臂，指尖有消毒水的气味。"],
     beliefs: ["救人是本分，不是功劳。每一具尸体都在说话。", "人体是最诚实的——它不会编造病症。", "只要还有一口气，就还没到放弃的时候。"],
-    significantPeople: ["战地医院的老师，教会他'先处理最致命的伤'。", "护士长，在他最难熬的战争年代一直站在他这边。", "一位没能救回来的病人——他至今记得那张脸。"],
-    meaningfulPlace: ["战地医院的手术台，血迹和呻吟声至今历历在目。", "镇上诊所的候诊室，他在这里见过半座小镇的人生。", "医学院的解剖教室，他的信仰在那里建立。"],
+    significantPeople: ["战地医院的老师，教会了'先处理最致命的伤'。", "护士长，在最难熬的战争年代一直站在身边。", "一位没能救回来的病人——至今仍记得那张脸。"],
+    meaningfulPlace: ["战地医院的手术台，血迹和呻吟声至今历历在目。", "镇上诊所的候诊室，在这里见过半座小镇的人生。", "医学院的解剖教室，信仰在那里建立。"],
     treasuredPossession: ["一套从不离身的旧手术器械，是老师留下的。", "泛黄的笔记本，密密麻麻记着每个病例。", "一枚军医的臂章，褪了色但洗得干干净净。"],
     traits: ["理性沉稳，学术派，紧张时反而更冷静。", "对病痛有近乎病态的责任感。", "说话直接，不擅长安慰人，但从不敷衍。"],
-    woundsAndScars: ["左手腕一道深深的手术疤痕，他自己缝的。", "战争时期弹片留下的旧伤，走路微跛。", "指节上有常年握手术钳磨出的茧。"],
-    phobiasAndManias: ["害怕看到血，却每天都要面对血——他从不提起。", "对消毒水的气味有强迫性的依赖。", "无法接受'无能为力'，会把每个失败病例反复复盘到深夜。"],
+    woundsAndScars: ["左手腕一道深深的手术疤痕，是自己缝的。", "战争时期弹片留下的旧伤，走路微跛。", "指节上有常年握手术钳磨出的茧。"],
+    phobiasAndManias: ["害怕看到血，却每天都要面对血——从不提起。", "对消毒水的气味有强迫性的依赖。", "无法接受'无能为力'，会把每个失败病例反复复盘到深夜。"],
   },
   soldier: {
     appearance: [
       "身板笔直，肩膀宽阔，站姿永远是标准军姿，皮肤晒得黝黑。",
       "壮实的身躯上叠着旧军装，走路带着战场上的警觉。",
       "短发，目光坚定，双手粗粝，指节上有老茧。"],
-    beliefs: ["命令就是命令，但良心的事，他一个人担着。", "战场上活下来的人欠死去的战友一条命。", "秩序与纪律——没有它们，人比野兽还糟。"],
-    significantPeople: ["排长，替他们挡了那颗炮弹。", "同乡的战友，两个人都活着回来了，却都不愿再提那场仗。", "家里的老母亲，他写信时总说'一切都好'。"],
-    meaningfulPlace: ["战壕里最深处的那段掩体，他在那里失去了最好的朋友。", "入伍前的农场，麦田尽头是母亲的炊烟。", "退伍后常去的酒馆角落，能看见门口进出的人。"],
-    treasuredPossession: ["战友的军牌，他一直贴身带着。", "一把擦得锃亮的老式刺刀，是排长的遗物。", "褪色的全家福，被血渍染过一角。"],
+    beliefs: ["命令就是命令，但良心的事，自己担着。", "战场上活下来的人欠死去的战友一条命。", "秩序与纪律——没有它们，人比野兽还糟。"],
+    significantPeople: ["排长，替他们挡了那颗炮弹。", "同乡的战友，两个人都活着回来了，却都不愿再提那场仗。", "家里的老母亲，写信时总说'一切都好'。"],
+    meaningfulPlace: ["战壕里最深处的那段掩体，曾在那里失去了最好的朋友。", "入伍前的农场，麦田尽头是母亲的炊烟。", "退伍后常去的酒馆角落，能看见门口进出的人。"],
+    treasuredPossession: ["战友的军牌，一直贴身带着。", "一把擦得锃亮的老式刺刀，是排长的遗物。", "褪色的全家福，被血渍染过一角。"],
     traits: ["纪律严明，行动果断，不轻易流露情绪。", "护短，对认定的队友掏心掏肺。", "警觉性极高，睡觉时都留着一只耳朵。"],
     woundsAndScars: ["左肋的弹片伤，至今还有碎片取不出来。", "后背一道长长的刀疤，是拼刺刀时留下的。", "右耳听力受损，战场上被炮震的。"],
     phobiasAndManias: ["怕密闭空间——战壕的记忆会突然涌上来。", "对突然的巨响反应过度，会本能地找掩体。", "强迫性地检查门窗是否锁好，每晚三次。"],
@@ -156,11 +157,11 @@ const PROFILE_POOLS: Record<string, OccupationProfileTemplates> = {
     appearance: [
       "花白头发，金丝眼镜，三件套西装总带着粉笔灰。",
       "清瘦，驼背，衣领永远翻不齐，但眼神明亮。",
-      "蓄着讲究的胡须，手里常夹着一支没点着的烟斗。"],
+      "头发梳得讲究，手里常夹着一支没点着的烟斗。"],
     beliefs: ["知识是唯一的救赎。未知之物只是尚未被命名的已知。", "每个谜团都有答案，只要找对研究方法。", "启蒙与理性——这是人类对抗黑暗的武器。"],
-    significantPeople: ["导师，教会他'怀疑一切'，包括自己的结论。", "图书馆管理员，替他保留了许多绝版手稿。", "早逝的同事，两人曾计划合著一本书，终究没能完成。"],
-    meaningfulPlace: ["大学图书馆的善本室，霉味和羊皮纸的气息让他安心。", "书房的窗边，那里放着他所有未完成的论文。", "年轻时游学的希腊遗迹，他在那里第一次触摸到古物。"],
-    treasuredPossession: ["一本签名版的《死者之书》——当然，只是译本。", "祖传的放大镜，镜框包浆温润。", "一叠手稿，是他毕生研究的全部心血。"],
+    significantPeople: ["导师，教会了'怀疑一切'，包括自己的结论。", "图书馆管理员，保留了许多绝版手稿。", "早逝的同事，两人曾计划合著一本书，终究没能完成。"],
+    meaningfulPlace: ["大学图书馆的善本室，霉味和羊皮纸的气息让人安心。", "书房的窗边，那里放着所有未完成的论文。", "年轻时游学的希腊遗迹，曾在那里第一次触摸到古物。"],
+    treasuredPossession: ["一本签名版的《死者之书》——当然，只是译本。", "祖传的放大镜，镜框包浆温润。", "一叠手稿，是毕生研究的全部心血。"],
     traits: ["博学而固执，学术上的争论寸步不让。", "好奇心旺盛，为了一个答案可以翻遍整座图书馆。", "不善社交，但讲到专业话题会滔滔不绝。"],
     woundsAndScars: ["右手腕的旧伤，年轻时翻古物被砸伤，写字久了会抖。", "胃病——常年伏案、三餐不定。", "左眼视力受损，读古籍熬坏了。"],
     phobiasAndManias: ["怕火——童年家里失过火。", "对'未知'有偏执的求知欲，越禁忌越想弄明白。", "强迫性地整理书架，顺序乱了会坐立不安。"],
@@ -171,8 +172,8 @@ const PROFILE_POOLS: Record<string, OccupationProfileTemplates> = {
       "瘦削，动作快，说话也快，随身带着一台老式相机。",
       "不修边幅，帽檐下的眼睛却从不放过任何细节。"],
     beliefs: ["真相值得付出代价——哪怕别人不想让它被看见。", "每个人都有自己的故事，问题是怎么挖出来。", "铅字的力量，比枪弹更持久。"],
-    significantPeople: ["主编，虽然总骂他，但从不砍他的稿。", "线人，那个总在深夜给他打电话的神秘声音。", "被报道改变命运的小人物——他欠他们一个公正。"],
-    meaningfulPlace: ["报社的排字车间，油墨味就是他的青春。", "街角那家二十四小时咖啡店，他在那里赶过无数个截稿日。", "第一次发头版的那个报摊，他还记得自己买了一份藏起来。"],
+    significantPeople: ["主编，虽然总骂人，但从不砍稿。", "线人，那个总在深夜来电的神秘声音。", "被报道改变命运的小人物——欠他们一个公正。"],
+    meaningfulPlace: ["报社的排字车间，油墨味就是青春。", "街角那家二十四小时咖啡店，曾在那里赶过无数个截稿日。", "第一次发头版的那个报摊，还记得买了一份藏起来。"],
     treasuredPossession: ["一台老式打字机，按键被磨得发亮。", "剪报本，贴着所有自己署名的文章。", "一个采访本，扉页写着'还债用'。"],
     traits: ["嗅觉敏锐，敢闯敢问，为了新闻可以不眠不休。", "嘴皮子利索，但笔下的真相从不含糊。", "怀疑一切，包括自己亲眼所见。"],
     woundsAndScars: ["采访暴动时被砸伤的后脑，留了一条疤。", "右手腕腱鞘炎，打字多了就疼。", "被威胁过，对方留下的一刀划在手臂上。"],
@@ -181,15 +182,15 @@ const PROFILE_POOLS: Record<string, OccupationProfileTemplates> = {
   // ── 通用兜底 ──
   generic: {
     appearance: [
-      "衣着得体而平凡，丢进人群里不会引起注意——这正是他的掩护。",
+      "衣着得体而平凡，丢进人群里也不会引起注意。",
       "身形匀称，举止克制，带着职业习惯的利落。",
       "面容沉静，眼神却总在观察四周。"],
     beliefs: ["世界比表面更复杂，也更有条理。", "谨慎不是懦弱，是活着的前提。", "该做的事，总要有人做。"],
     significantPeople: ["一位过世的亲人，留下的遗物还在身边。", "多年的老友，彼此从不问对方的过去。", "一位恩人，在最低谷时伸过手。"],
-    meaningfulPlace: ["老家的旧宅，拆了一半，记忆还完整。", "年轻时待过的城市一角，那里有最好的回忆。", "一座安静的教堂/码头/图书馆，他常去那里想事情。"],
+    meaningfulPlace: ["老家的旧宅，拆了一半，记忆还完整。", "年轻时待过的城市一角，那里有最好的回忆。", "一间安静的街角书店，常在那里想事情。"],
     treasuredPossession: ["一枚旧硬币，据说能带来好运。", "一封写了没寄出的信。", "一把多功能小刀，用顺手了二十年。"],
     traits: ["冷静克制，观察力强，不轻易表态。", "关键时刻靠得住，平时不显山露水。", "有自己的原则，碰到底线寸步不让。"],
-    woundsAndScars: ["右手背一道旧疤，来历他从不提起。", "一条腿受过伤，阴雨天会隐隐作痛。", "肩胛上一块烧伤的痕迹，被衣物盖着。"],
+    woundsAndScars: ["右手背一道旧疤，来历从不提起。", "一条腿受过伤，阴雨天会隐隐作痛。", "肩胛上一块烧伤的痕迹，被衣物盖着。"],
     phobiasAndManias: ["怕黑——不是怕黑暗本身，是怕黑暗里的东西。", "对被人从背后接近有本能警觉。", "习惯性地把随身物品清点三遍。"],
   },
 };
@@ -199,17 +200,17 @@ function poolFor(archetypeId: string): OccupationProfileTemplates {
 }
 
 /** 生成八项背景元素（模板池随机，同步无副作用） */
-export function buildBaseBackgroundProfile(archetype: CharacterArchetype): BackgroundProfile {
+export function buildBaseBackgroundProfile(archetype: CharacterArchetype, randomUnit: RandomUnit = Math.random): BackgroundProfile {
   const pool = poolFor(archetype.id);
   return {
-    appearance: pick(pool.appearance),
-    beliefs: pick(pool.beliefs),
-    significantPeople: pick(pool.significantPeople),
-    meaningfulPlace: pick(pool.meaningfulPlace),
-    treasuredPossession: pick(pool.treasuredPossession),
-    traits: pick(pool.traits),
-    woundsAndScars: pick(pool.woundsAndScars),
-    phobiasAndManias: pick(pool.phobiasAndManias),
+    appearance: pick(pool.appearance, randomUnit),
+    beliefs: pick(pool.beliefs, randomUnit),
+    significantPeople: pick(pool.significantPeople, randomUnit),
+    meaningfulPlace: pick(pool.meaningfulPlace, randomUnit),
+    treasuredPossession: pick(pool.treasuredPossession, randomUnit),
+    traits: pick(pool.traits, randomUnit),
+    woundsAndScars: pick(pool.woundsAndScars, randomUnit),
+    phobiasAndManias: pick(pool.phobiasAndManias, randomUnit),
   };
 }
 
@@ -257,11 +258,33 @@ export function composeBackstory(
   profile: BackgroundProfile,
   ctx: { name: string; occupation: string; era: string },
 ): string {
+  const clause = (value: string | undefined): string => value
+    ?.trim()
+    .replace(/[。！？!?…]+$/u, "")
+    .trim() ?? "";
+  const sentence = (value: string): string => {
+    const content = clause(value);
+    return content ? `${content}。` : "";
+  };
+  const name = clause(ctx.name);
+  const occupation = clause(ctx.occupation);
+  const era = clause(ctx.era);
+  const identity = [
+    name,
+    era && occupation ? `${era.endsWith("年") ? era : `${era}年`}的${occupation}` : era || occupation,
+  ].filter(Boolean).join("，");
+
+  const beliefs = clause(profile.beliefs);
+
   return [
-    `${ctx.name}，${ctx.era}年的${ctx.occupation}。${profile.appearance}`,
-    `他相信：${profile.beliefs}`,
-    `对他而言，${profile.significantPeople}。而${profile.meaningfulPlace}，是难以忘怀的地方。`,
-    `他身上带着${profile.treasuredPossession}。${profile.woundsAndScars}`,
-    `他还有不为人知的一面：${profile.phobiasAndManias}`,
-  ].join("");
+    sentence(identity),
+    sentence(profile.appearance),
+    beliefs && sentence(`相信${beliefs}`),
+    sentence(profile.significantPeople),
+    sentence(profile.meaningfulPlace),
+    sentence(profile.treasuredPossession),
+    sentence(profile.traits),
+    sentence(profile.woundsAndScars),
+    sentence(profile.phobiasAndManias),
+  ].filter(Boolean).join("");
 }

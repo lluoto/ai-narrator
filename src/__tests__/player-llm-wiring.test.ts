@@ -58,10 +58,10 @@ function enableLLM() {
 }
 
 describe("GameSession 要接上玩家决策的 LLM 接缝", () => {
-  test("**错误行为的红线**：LLM 可用时，建会话就该接上", () => {
+  test("GameSession does not create PlayerAgent instances or mutate the legacy player global", () => {
     enableLLM();
     new GameSession(`w-${Math.random()}`, "cosmic-horror", REAL_LOOKING);
-    expect(playerLLMConfigured()).toBe(true);
+    expect(playerLLMConfigured()).toBe(false);
   });
 
   test("**正确**：LLM_DISABLED=true 时不接 —— 离线开关必须拦得住", () => {

@@ -14,7 +14,7 @@
 // 从 PDF 到本文件这一步没有程序做过——现有内容是人/LLM 手写的。
 // ============================================================
 
-import { type ModuleData, type ModuleSupport, type Scene, type ModuleNPC, type ModuleItem, type Clue, type EpilogueEntry, type PartySetup, type EndNarration, type EncounterNarration } from "./types";
+import { type RuntimeModuleData, type ModuleSupport, type Scene, type ModuleNPC, type ModuleItem, type Clue, type EpilogueEntry, type PartySetup, type EndNarration, type EncounterNarration } from "./types";
 import type { ModuleRuntimeConfig } from "./runtime-types";
 import { applyAllLlmExpanded } from "../llm/generate-llm-expanded";
 import { attachRuntimeNpcs } from "./runtime-npc-attachment";
@@ -951,7 +951,7 @@ const BARN_RUNTIME: ModuleRuntimeConfig = {
 };
 
 // ─── 导出数据 ──────────────────────────────────────────────
-const moduleData: ModuleData = {
+const moduleData: RuntimeModuleData = {
   id: "premiers_barn",
   title: "普瑞米尔的谷仓",
   version: "ver1.03",
@@ -2257,7 +2257,7 @@ function buildItems(): ModuleItem[] {
         detect: {
           skill: "侦查",
           difficulty: "regular",
-          penaltyDice: 1, // 夜晚
+          nightPenaltyDice: 1,
           alternativeSkill: "灵感",
           alternativeBackground: "军事",
         },
@@ -2282,7 +2282,7 @@ function buildItems(): ModuleItem[] {
         detect: {
           skill: "侦查",
           difficulty: "regular",
-          penaltyDice: 1, // 夜晚
+          nightPenaltyDice: 1,
           alternativeSkill: "灵感",
           alternativeBackground: "军事",
         },

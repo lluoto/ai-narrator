@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { BARN_OF_PREMIER } from "../module/barn-of-premier";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
@@ -81,34 +82,20 @@ describe("实跑症状：加比的拖车房三条线索（手枪/毒品/卡片�
 });
 
 describe("命中多条时要问清楚，不能替玩家选", () => {
-  it("同一句话能对应场景里两条线索时，回复要提示两个选项，且不直接给出任何一条的揭示文本", async () => {
-    const session = await arenaAt("加比的拖车房");
-    const investigation: any = (session as any).investigation;
-    // 构造两条关键词重叠的合成线索，制造真实的歧义场景
-    investigation.addClueType("clue_syn_a", {
-      description: "测试线索甲", scene: "加比的拖车房",
-      matchTexts: ["测试甲", "检查桌子上的东西"],
-      displayName: "桌上的东西",
-      coc_primary: { skill: "spot_hidden", regular: "甲的揭示文本", fail: "没找到" },
-    });
-    investigation.addClueType("clue_syn_b", {
-      description: "测试线索乙", scene: "加比的拖车房",
-      matchTexts: ["测试乙", "检查桌子下面的箱子"],
-      displayName: "桌下的箱子",
-      coc_primary: { skill: "spot_hidden", regular: "乙的揭示文本", fail: "没找到" },
-    });
+  it("真实维修间里一句话能对应两条线索时，回复要提示澄清且不泄露任一揭示文本", async () => {
+    const session = await arenaAt("维修间");
+    const maintenanceRoom = BARN_OF_PREMIER.scenes.find((scene) => scene.id === "维修间")!;
 
     const real = Math.random;
     Math.random = () => 0;
     try {
-      const res = await session.act("检查桌子");
+      const res = await session.act("打开那口像冰箱一样的棺材");
       const all = res.events.map((e) => e.content).join("\n");
-      expect(all).not.toMatch(/甲的揭示文本|乙的揭示文本/);
-      // 开发·对象名通向线索 任务2：不再直接报出候选展示名（"桌上的东西"/
-      // "桌下的箱子"）——那是剧透，与行动锚点的"中"粒度标准不一致
-      // （告诉玩家有东西、不说是什么）。改成只说"不止一样东西"，
-      // 不带任何候选名字，见 applyClueDecision 的注释。
-      expect(all).not.toMatch(/桌上的东西|桌下的箱子/);
+      for (const clue of maintenanceRoom.clues) {
+        expect(all).not.toContain(clue.id);
+        expect(all).not.toContain(clue.name);
+        expect(all).not.toContain(clue.revelation);
+      }
       expect(all).toMatch(/不止一样东西/);
     } finally { Math.random = real; }
   });

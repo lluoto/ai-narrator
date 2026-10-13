@@ -1,11 +1,11 @@
 import { CompilerQuestionError, buildCompilerQuestionQueue, validateCompilerQuestionQueue, validateModuleCompileHints, type CompilerQuestionQueue, type ModuleCompileHints } from "../compiler/compiler-question-queue";
 import { resolveDraftModule, type ResolvedDraftModule } from "../compiler/compile-hint-resolution";
 import { compileDeterministicTemplates, type DraftModuleStructure } from "../compiler/deterministic-template-compiler";
-import { executeMechanicsAction, initialMechanicsState, mechanicsStateHash, settleAutomaticMechanics, validateMechanicsAnalysisInput, createMechanicsStateBudget, type MechanicsAnalysisInput, type MechanicsReachabilityEdge, type MechanicsState } from "../compiler/mechanics-execution";
+import { executeMechanicsAction, mechanicsStateHash, settleAutomaticMechanics, settleInitialMechanics, validateMechanicsAnalysisInput, createMechanicsStateBudget, type MechanicsAnalysisInput, type MechanicsReachabilityEdge, type MechanicsState } from "../compiler/mechanics-execution";
 import { MechanicsCompilationError, validateMechanicsIR, sourceFactGraphIdentity, type MechanicsIR } from "../compiler/mechanics-ir";
 import { MechanicsReachabilityError, replayMechanicsWitness, type MechanicsReachabilityReport, type MechanicsWitness } from "../compiler/mechanics-reachability";
 import { buildSourceFactGraph, validateSourceFactGraph, type SourceFactGraph } from "../compiler/source-fact-graph";
-import { cleanPageWithTrace, joinPagesWithTrace } from "../ingest/clean-text";
+import { cleanPagesWithTrace, joinPagesWithTrace } from "../ingest/clean-text";
 import { buildDocumentBlocks } from "../ingest/document-blocks";
 import { createSyntheticDocumentIR } from "../ingest/document-ir";
 
@@ -200,7 +200,7 @@ export function prepareCompilerProcessSimulation(input: CompilerProcessSimulatio
   }
   try {
     const document = createSyntheticDocumentIR([...input.rawPages], input.sourceDescriptor);
-    const blocks = buildDocumentBlocks(document, joinPagesWithTrace(document.pages.map(cleanPageWithTrace)));
+    const blocks = buildDocumentBlocks(document, joinPagesWithTrace(cleanPagesWithTrace(document.pages)));
     const graph = buildSourceFactGraph(document, blocks);
     const draft = compileDeterministicTemplates(graph, { moduleId: input.moduleId });
     const queue = buildCompilerQuestionQueue(graph, draft);
@@ -229,7 +229,7 @@ function validateResolvedBundle(bundle: ResolvedCompilerProcessSimulation): Comp
     if (bundle.identity.moduleId !== bundle.preparedQueue.moduleId || bundle.identity.moduleId !== bundle.resolvedQueue.moduleId || bundle.identity.moduleId !== bundle.mechanicsIR.moduleId || bundle.identity.documentHash !== bundle.graph.documentIdentity.documentHash || bundle.identity.documentHash !== bundle.preparedQueue.documentHash || bundle.identity.documentHash !== bundle.resolvedQueue.documentHash || bundle.identity.documentHash !== bundle.mechanicsIR.documentHash || bundle.identity.sourceGraphIdentity !== graphIdentity || bundle.identity.sourceGraphIdentity !== bundle.preparedQueue.sourceGraphIdentity || bundle.identity.sourceGraphIdentity !== bundle.resolvedQueue.sourceGraphIdentity || bundle.identity.sourceGraphIdentity !== bundle.mechanicsIR.sourceGraphIdentity || bundle.identity.preparedQueueHash !== bundle.preparedQueue.queueHash || bundle.identity.resolvedQueueHash !== bundle.resolvedQueue.queueHash || bundle.identity.mechanicsHash !== bundle.mechanicsIR.mechanicsHash) {
       return refusal("execute", "EXECUTE_BUNDLE_IDENTITY_MISMATCH", "resolved bundle identity does not agree");
     }
-    validateModuleCompileHints(bundle.preparedQueue, bundle.hints);
+    validateModuleCompileHints(bundle.preparedQueue, bundle.hints, bundle.graph);
     const regenerated = resolveDraftModule(bundle.graph, bundle.draft, bundle.preparedQueue, bundle.hints);
     const complete = regenerated.readiness.status === "mechanically_closed" && regenerated.mechanicsIR && regenerated.analysisInput && regenerated.reachabilityReport;
     const lineageMatches = complete &&
@@ -267,7 +267,7 @@ export function resolveCompilerProcessSimulation(prepared: PreparedCompilerProce
     return refusal("hints", "HINTS_IDENTITY_MISMATCH", "hint identity does not match prepared process");
   }
   try {
-    validateModuleCompileHints(preparedCopy.queue, envelope.hints);
+    validateModuleCompileHints(preparedCopy.queue, envelope.hints, preparedCopy.graph);
   } catch (error) {
     return expectedRefusal("hints", "HINTS_INVALID", error);
   }
@@ -340,9 +340,8 @@ export function executeCompilerProcessSimulation(bundle: ResolvedCompilerProcess
   const invalidBundle = validateCompilerProcessSimulationLineage(bundle, resolved);
   if (invalidBundle) return invalidBundle;
   try {
-    const initial = initialMechanicsState(resolved.analysisInput);
     const executionBudget = createMechanicsStateBudget(resolved.analysisInput.maxStates);
-    const initialSettlement = settleAutomaticMechanics(resolved.mechanicsIR, initial, executionBudget);
+    const initialSettlement = settleInitialMechanics(resolved.mechanicsIR, resolved.analysisInput, executionBudget);
     let state = initialSettlement.state;
     const executionTrace = [...initialSettlement.steps];
     for (const requested of script.actions) {

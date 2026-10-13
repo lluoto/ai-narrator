@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "fs";
 import { compileMechanics, type MechanicsCandidateSpec, type MechanicsCompilationInput, type MechanicsSymbols } from "../compiler/mechanics-ir";
 import { analyzeMechanicsReachability, mechanicsStateHash, replayMechanicsWitness, type MechanicsAnalysisInput } from "../compiler/mechanics-reachability";
-import { availableMechanicsPlayerActions, createMechanicsStateBudget, executeMechanicsAction, initialMechanicsState, settleAutomaticMechanics } from "../compiler/mechanics-execution";
+import { applyMechanicsEffects, availableMechanicsPlayerActions, createMechanicsStateBudget, executeMechanicsAction, initialMechanicsState, matchesMechanicsPredicate, settleAutomaticMechanics, settleInitialMechanics } from "../compiler/mechanics-execution";
 import { applyFactInterpretationReviews, buildSourceFactGraph, sourceStatementEvidenceRefId, type FactInterpretationCandidate } from "../compiler/source-fact-graph";
 import { importPointsTo, scanImports } from "../diagnostics/source-scan";
 import { cleanPageWithTrace, joinPagesWithTrace } from "../ingest/clean-text";
@@ -26,7 +26,15 @@ function compileFixture(specs: MechanicsCandidateSpec[], overrideSymbols = symbo
   const blocks = buildDocumentBlocks(document, joinPagesWithTrace(document.pages.map(cleanPageWithTrace)));
   const sourceGraph = buildSourceFactGraph(document, blocks);
   const statementId = sourceGraph.statements[0]!.id;
-  const candidates: FactInterpretationCandidate<MechanicsCandidateSpec>[] = specs.map((value) => ({
+  const statementQuote = sourceGraph.statements[0]!.text;
+  const sourcedSpecs = specs.map((value) => {
+    const spec = structuredClone(value);
+    if (spec.kind === "discovery_method" || spec.kind === "connection_gate") {
+      for (const binding of spec.actorEffectProvenance ?? []) binding.source = { statementId, quote: statementQuote };
+    }
+    return spec;
+  });
+  const candidates: FactInterpretationCandidate<MechanicsCandidateSpec>[] = sourcedSpecs.map((value) => ({
     id: `accepted:${value.id}`,
     sourceStatementIds: [statementId],
     claim: {
@@ -56,7 +64,7 @@ function compileFixture(specs: MechanicsCandidateSpec[], overrideSymbols = symbo
   const input: MechanicsCompilationInput = {
     moduleId: "mechanics-reachability-fixture",
     documentHash: null,
-    sourceGraphSchemaVersion: "1.0.0",
+    sourceGraphSchemaVersion: "1.1.0",
     symbols: overrideSymbols,
     acceptedInterpretationIds: candidates.map((candidate) => candidate.id),
   };
@@ -106,6 +114,39 @@ function fixture() {
 }
 
 describe("Mechanics reachability", () => {
+  it("keeps selected SAN actor effects branch-bound at their original effect index and never lets pure mechanics ignore them", () => {
+    const sanity = { kind: "sanity_check", passLoss: { kind: "fixed", amount: 0 }, failLoss: { kind: "fixed", amount: 1 } } as const;
+    const ir = compileFixture([
+      { kind: "discovery_method", id: "probe", clueId: "clue_parent", action: "observe", target: "scene", targetId: "scene_foyer", check: { kind: "skill", skill: "spot_hidden", difficulty: "regular" }, onSuccess: [sanity, { kind: "discover_clue", clueId: "clue_parent" }], onFailure: [sanity], failback: { maxFailures: 1, effects: [sanity, { kind: "discover_clue", clueId: "clue_parent" }] }, actorEffectProvenance: [
+        { effectPath: "onSuccess[0]", eventSlot: { kind: "discovery", mechanismId: "probe", outcome: "success", effectIndex: 0 }, source: { statementId: "synthetic", quote: "synthetic SAN" } },
+        { effectPath: "onFailure[0]", eventSlot: { kind: "discovery", mechanismId: "probe", outcome: "failure", effectIndex: 0 }, source: { statementId: "synthetic", quote: "synthetic SAN" } },
+        { effectPath: "failback.effects[0]", eventSlot: { kind: "discovery", mechanismId: "probe", outcome: "failback", effectIndex: 0 }, source: { statementId: "synthetic", quote: "synthetic SAN" } },
+      ] },
+      { kind: "connection_gate", id: "walk", connectionId: "connection_archive", onTraverse: [sanity], actorEffectProvenance: [{ effectPath: "onTraverse[0]", eventSlot: { kind: "connection", connectionId: "connection_archive", outcome: "traverse", effectIndex: 0 }, source: { statementId: "synthetic", quote: "synthetic SAN" } }] },
+    ]);
+    const input: MechanicsAnalysisInput = { entrySceneId: "scene_foyer", initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: {}, npcStates: {} }, coreClueIds: [], connections: [{ id: "connection_archive", fromSceneId: "scene_foyer", toSceneId: "scene_archive" }], discoveryLocations: { probe: "scene_foyer" }, maxStates: 100 };
+    const initial = initialMechanicsState(input);
+    expect(() => applyMechanicsEffects(initial, [sanity])).toThrow("must be settled");
+    const success = executeMechanicsAction(ir, input, initial, { mechanismId: "probe", outcome: "success" });
+    const failure = executeMechanicsAction(ir, input, initial, { mechanismId: "probe", outcome: "failure" });
+    const failback = executeMechanicsAction(ir, input, failure.state, { mechanismId: "probe", outcome: "failback" });
+    const traverse = executeMechanicsAction(ir, input, initial, { mechanismId: "walk", outcome: "traverse" });
+    expect([success, failure, failback, traverse].map((entry) => entry.actorEffects[0] && [entry.edge.outcome, entry.actorEffects[0].outcome, entry.actorEffects[0].effectIndex])).toEqual([
+      ["success", "success", 0], ["failure", "failure", 0], ["failback", "failback", 0], ["traverse", "traverse", 0],
+    ]);
+  });
+
+  it("applies acquire_item idempotently through the shared state transition path", () => {
+    const initial = {
+      currentSceneId: "scene_foyer", foundClueIds: [], visitedSceneIds: ["scene_foyer"], ownedItemIds: [], stateValues: {}, npcStates: {},
+      unlockedConnectionIds: [], failureCounts: {}, encounters: {}, startedEncounterIds: [], rewardIds: [],
+    };
+    const acquired = applyMechanicsEffects(initial, [{ kind: "acquire_item", itemId: "item_key" }, { kind: "acquire_item", itemId: "item_key" }]);
+    expect(acquired.ownedItemIds).toEqual(["item_key"]);
+    expect(matchesMechanicsPredicate({ kind: "item_owned", itemId: "item_key" }, acquired)).toBe(true);
+    expect(applyMechanicsEffects(acquired, [{ kind: "acquire_item", itemId: "item_key" }])).toEqual(acquired);
+  });
+
   it("requires terminal-first and automatic settlement before a direct player action", () => {
     const ir = compileFixture([
       { kind: "discovery_method", id: "find", clueId: "clue_parent", action: "search", target: "scene", targetId: "scene_foyer", onSuccess: [{ kind: "discover_clue", clueId: "clue_parent" }] },
@@ -127,6 +168,52 @@ describe("Mechanics reachability", () => {
     expect(() => executeMechanicsAction(terminal, terminalInput, initial, { mechanismId: "late", outcome: "success" })).toThrow(expect.objectContaining({ code: "action_before_settlement" }));
     const terminalState = settleAutomaticMechanics(terminal, initial).state;
     expect(() => executeMechanicsAction(terminal, terminalInput, terminalState, { mechanismId: "late", outcome: "success" })).toThrow(expect.objectContaining({ code: "action_after_terminal" }));
+  });
+
+  it("settles an initial automatic chain through terminal source-bound reward evaluation", () => {
+    // This is a shared-core MechanicsIR fixture.  It does not claim that the
+    // current hints/resolver contract can source this particular chain.
+    const terminalSymbols: MechanicsSymbols = {
+      ...symbols,
+      clueIds: [],
+      sceneIds: ["entry"],
+      connectionIds: [],
+      endingIds: ["ending_done"],
+      rewardIds: ["reward_entry"],
+      declaredStateKeys: ["phase"],
+    };
+    const ir = compileFixture([
+      { kind: "state_transition", id: "arm_terminal", when: { kind: "state_eq", stateKey: "phase", value: 0 }, effects: [{ kind: "set_state", stateKey: "phase", value: 1 }] },
+      { kind: "ending_rule", id: "finish_after_transition", priority: 1, when: { kind: "state_eq", stateKey: "phase", value: 1 }, effects: [{ kind: "end_game", endingId: "ending_done" }] },
+      { kind: "reward_definition", id: "reward_entry", when: { kind: "scene_visited", sceneId: "entry" }, settlement: { san: { kind: "fixed", amount: 1 } } },
+    ], terminalSymbols);
+    const input: MechanicsAnalysisInput = {
+      entrySceneId: "entry",
+      initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: { phase: 0 }, npcStates: {} },
+      coreClueIds: [],
+      connections: [],
+      discoveryLocations: {},
+      maxStates: 8,
+    };
+
+    const settled = settleInitialMechanics(ir, input);
+    expect(settled.steps.map((step) => [step.mechanismId, step.outcome])).toEqual([
+      ["arm_terminal", "transition"],
+      ["finish_after_transition", "ending"],
+    ]);
+    expect(settled.state).toMatchObject({
+      stateValues: { phase: 1 },
+      terminalEndingId: "ending_done",
+      rewardIds: ["reward_entry"],
+    });
+
+    const report = analyzeMechanicsReachability(ir, input);
+    const witness = report.endingWitnesses.ending_done!;
+    expect(witness.steps).toEqual(settled.steps);
+    expect(replayMechanicsWitness(ir, input, witness)).toMatchObject({
+      terminalEndingId: "ending_done",
+      rewardIds: ["reward_entry"],
+    });
   });
 
   it("encapsulates state budgets and action provenance from caller mutation", () => {
@@ -166,12 +253,200 @@ describe("Mechanics reachability", () => {
     expect(report.endingWitnesses.ending_escape?.steps.map((step) => step.mechanismId)).toEqual(["discover_parent", "discover_child", "open_archive", "traverse_archive", "ending_escape"]);
   });
 
+  it("bounds independent pure findings by control state while retaining complete replay hashes", () => {
+    const observationClues = Array.from({ length: 7 }, (_, index) => `observation_${index + 1}`);
+    const observationSymbols: MechanicsSymbols = {
+      ...symbols,
+      clueIds: observationClues,
+      sceneIds: ["entry", "exit"],
+      connectionIds: ["leave"],
+      endingIds: ["done"],
+      declaredStateKeys: [],
+    };
+    const ir = compileFixture([
+      ...observationClues.map((clueId): MechanicsCandidateSpec => ({
+        kind: "discovery_method", id: `observe_${clueId}`, clueId, action: "search", target: "scene", targetId: "entry",
+        check: { kind: "attribute", attribute: "edu", difficulty: "regular" }, onSuccess: [{ kind: "discover_clue", clueId }],
+      })),
+      { kind: "connection_gate", id: "leave", connectionId: "leave" },
+      { kind: "ending_rule", id: "finish", priority: 1, when: { kind: "scene_visited", sceneId: "exit" }, effects: [{ kind: "end_game", endingId: "done" }] },
+    ], observationSymbols);
+    const input: MechanicsAnalysisInput = {
+      entrySceneId: "entry",
+      initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: {}, npcStates: {} },
+      coreClueIds: [],
+      connections: [{ id: "leave", fromSceneId: "entry", toSceneId: "exit" }],
+      discoveryLocations: Object.fromEntries(observationClues.map((clueId) => [`observe_${clueId}`, "entry"])),
+      maxStates: 3,
+    };
+
+    const report = analyzeMechanicsReachability(ir, input);
+    expect(report.reachableStateCount).toBe(3);
+    expect(report.reachableClueIds).toEqual(observationClues);
+    const pureEdge = report.edges.find((edge) => edge.mechanismId === "observe_observation_1" && edge.outcome === "success")!;
+    const executed = executeMechanicsAction(ir, input, initialMechanicsState(input), { mechanismId: "observe_observation_1", outcome: "success" });
+    expect(pureEdge).toEqual(executed.edge);
+    const pureWitness = {
+      startSceneId: "entry",
+      steps: [pureEdge],
+      final: { kind: "clue" as const, id: "observation_1", stateHash: pureEdge.afterStateHash },
+    };
+    expect(replayMechanicsWitness(ir, input, pureWitness).foundClueIds).toEqual(["observation_1"]);
+    expect(replayMechanicsWitness(ir, input, report.endingWitnesses.done!).terminalEndingId).toBe("done");
+  });
+
+  it("retains core and predicate-referenced clues, including a post-discovery trap", () => {
+    const guardSymbols: MechanicsSymbols = {
+      ...symbols,
+      clueIds: ["core_observation", "trap"],
+      sceneIds: ["entry", "exit"],
+      connectionIds: ["leave"],
+      endingIds: ["done"],
+      declaredStateKeys: [],
+    };
+    const core = compileFixture([{
+      kind: "discovery_method", id: "observe_core", clueId: "core_observation", action: "observe", target: "scene", targetId: "entry",
+      onSuccess: [{ kind: "discover_clue", clueId: "core_observation" }],
+    }], guardSymbols);
+    const coreInput: MechanicsAnalysisInput = {
+      entrySceneId: "entry",
+      initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: {}, npcStates: {} },
+      coreClueIds: ["core_observation"], connections: [], discoveryLocations: { observe_core: "entry" }, maxStates: 2,
+    };
+    const coreReport = analyzeMechanicsReachability(core, coreInput);
+    expect(coreReport.reachableStateCount).toBe(2);
+    expect(replayMechanicsWitness(core, coreInput, coreReport.coreClueWitnesses.core_observation!).foundClueIds).toEqual(["core_observation"]);
+
+    const trap = compileFixture([
+      { kind: "discovery_method", id: "observe_trap", clueId: "trap", action: "observe", target: "scene", targetId: "entry", onSuccess: [{ kind: "discover_clue", clueId: "trap" }] },
+      { kind: "connection_gate", id: "leave", connectionId: "leave", availability: { kind: "not", predicate: { kind: "clue_found", clueId: "trap" } } },
+      { kind: "ending_rule", id: "finish", priority: 1, when: { kind: "scene_visited", sceneId: "exit" }, effects: [{ kind: "end_game", endingId: "done" }] },
+    ], guardSymbols);
+    const trapInput: MechanicsAnalysisInput = {
+      entrySceneId: "entry",
+      initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: {}, npcStates: {} },
+      coreClueIds: [], connections: [{ id: "leave", fromSceneId: "entry", toSceneId: "exit" }], discoveryLocations: { observe_trap: "entry" }, maxStates: 4,
+    };
+    const trapReport = analyzeMechanicsReachability(trap, trapInput);
+    expect(trapReport.reachableStateCount).toBe(4);
+    const deadlock = trapReport.deadlockWitnesses.find((witness) => witness.steps.map((step) => step.mechanismId).join(",") === "observe_trap")!;
+    expect(deadlock.final.stateHash).toBe(mechanicsStateHash({
+      ...initialMechanicsState(trapInput), foundClueIds: ["trap"],
+    }));
+    expect(replayMechanicsWitness(trap, trapInput, deadlock).foundClueIds).toEqual(["trap"]);
+  });
+
+  it("retains clues referenced only by terminal rewards and explores their real full-state continuation", () => {
+    const rewardSymbols: MechanicsSymbols = {
+      ...symbols,
+      clueIds: ["reward_observation"],
+      sceneIds: ["entry", "exit"],
+      connectionIds: ["leave"],
+      endingIds: ["done"],
+      rewardIds: ["reward_after_observation"],
+      declaredStateKeys: [],
+    };
+    const ir = compileFixture([
+      { kind: "discovery_method", id: "observe_reward", clueId: "reward_observation", action: "observe", target: "scene", targetId: "entry", onSuccess: [{ kind: "discover_clue", clueId: "reward_observation" }] },
+      { kind: "connection_gate", id: "leave", connectionId: "leave" },
+      { kind: "ending_rule", id: "finish", priority: 1, when: { kind: "scene_visited", sceneId: "exit" }, effects: [{ kind: "end_game", endingId: "done" }] },
+      { kind: "reward_definition", id: "reward_after_observation", when: { kind: "clue_found", clueId: "reward_observation" }, settlement: { san: { kind: "fixed", amount: 1 } } },
+    ], rewardSymbols);
+    const input: MechanicsAnalysisInput = {
+      entrySceneId: "entry",
+      initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: {}, npcStates: {} },
+      coreClueIds: [], connections: [{ id: "leave", fromSceneId: "entry", toSceneId: "exit" }], discoveryLocations: { observe_reward: "entry" }, maxStates: 6,
+    };
+    const report = analyzeMechanicsReachability(ir, input);
+    expect(report.reachableStateCount).toBe(6);
+    const observe = report.edges.find((edge) => edge.mechanismId === "observe_reward" && edge.outcome === "success")!;
+    const leave = report.edges.find((edge) => edge.mechanismId === "leave" && edge.beforeStateHash === observe.afterStateHash)!;
+    const finish = report.edges.find((edge) => edge.mechanismId === "finish" && edge.beforeStateHash === leave.afterStateHash)!;
+    expect(replayMechanicsWitness(ir, input, {
+      startSceneId: "entry", steps: [observe, leave, finish], final: { kind: "ending", id: "done", stateHash: finish.afterStateHash },
+    }).rewardIds).toEqual(["reward_after_observation"]);
+  });
+
+  it("does not collapse a clue when any one of its methods has failure, failback, or actor side effects", () => {
+    const guardSymbols: MechanicsSymbols = {
+      ...symbols,
+      clueIds: ["guarded"], sceneIds: ["entry"], connectionIds: [], endingIds: [], declaredStateKeys: ["phase"],
+    };
+    const baseInput: MechanicsAnalysisInput = {
+      entrySceneId: "entry",
+      initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: { phase: 0 }, npcStates: {} },
+      coreClueIds: [], connections: [], discoveryLocations: {}, maxStates: 4,
+    };
+    const mixedMethods = compileFixture([
+      { kind: "discovery_method", id: "pure_way", clueId: "guarded", action: "observe", target: "scene", targetId: "entry", onSuccess: [{ kind: "discover_clue", clueId: "guarded" }] },
+      { kind: "discovery_method", id: "risky_way", clueId: "guarded", action: "search", target: "scene", targetId: "entry", check: { kind: "skill", skill: "library_use", difficulty: "regular" }, onSuccess: [{ kind: "discover_clue", clueId: "guarded" }], onFailure: [{ kind: "set_state", stateKey: "phase", value: 1 }] },
+    ], guardSymbols);
+    const mixedInput = { ...baseInput, discoveryLocations: { pure_way: "entry", risky_way: "entry" }, maxStates: 4 };
+    expect(analyzeMechanicsReachability(mixedMethods, mixedInput).reachableStateCount).toBe(4);
+
+    const failback = compileFixture([{
+      kind: "discovery_method", id: "bounded_way", clueId: "guarded", action: "search", target: "scene", targetId: "entry", check: { kind: "skill", skill: "library_use", difficulty: "regular" },
+      onSuccess: [{ kind: "discover_clue", clueId: "guarded" }], failback: { maxFailures: 1, effects: [{ kind: "discover_clue", clueId: "guarded" }] },
+    }], guardSymbols);
+    const failbackInput = { ...baseInput, discoveryLocations: { bounded_way: "entry" } };
+    expect(analyzeMechanicsReachability(failback, failbackInput).reachableStateCount).toBe(4);
+
+    const sanity = { kind: "sanity_check", passLoss: { kind: "fixed", amount: 0 }, failLoss: { kind: "fixed", amount: 1 } } as const;
+    const actorEffect = compileFixture([{
+      kind: "discovery_method", id: "costly_observation", clueId: "guarded", action: "observe", target: "scene", targetId: "entry",
+      onSuccess: [{ kind: "discover_clue", clueId: "guarded" }, sanity],
+      actorEffectProvenance: [{ effectPath: "onSuccess[1]", eventSlot: { kind: "discovery", mechanismId: "costly_observation", outcome: "success", effectIndex: 1 }, source: { statementId: "synthetic", quote: "synthetic SAN" } }],
+    }], guardSymbols);
+    const actorInput = { ...baseInput, discoveryLocations: { costly_observation: "entry" }, maxStates: 2 };
+    expect(analyzeMechanicsReachability(actorEffect, actorInput).reachableStateCount).toBe(2);
+
+    // Even an idempotent write is a declared secondary success effect; its
+    // clue must not acquire the pure-observation equivalence exemption.
+    const stateEffect = compileFixture([{
+      kind: "discovery_method", id: "stateful_observation", clueId: "guarded", action: "observe", target: "scene", targetId: "entry",
+      onSuccess: [{ kind: "discover_clue", clueId: "guarded" }, { kind: "set_state", stateKey: "phase", value: 0 }],
+    }], guardSymbols);
+    const stateInput = { ...baseInput, discoveryLocations: { stateful_observation: "entry" }, maxStates: 2 };
+    expect(analyzeMechanicsReachability(stateEffect, stateInput).reachableStateCount).toBe(2);
+  });
+
+  it("retains externally discovered clues and keeps automatic cycle detection on complete hashes", () => {
+    const externalSymbols: MechanicsSymbols = {
+      ...symbols,
+      clueIds: ["externally_found"], sceneIds: ["entry"], connectionIds: ["loop"], endingIds: [], declaredStateKeys: ["phase"],
+    };
+    const connection = compileFixture([
+      { kind: "discovery_method", id: "observe_external", clueId: "externally_found", action: "observe", target: "scene", targetId: "entry", onSuccess: [{ kind: "discover_clue", clueId: "externally_found" }] },
+      { kind: "connection_gate", id: "loop", connectionId: "loop", onTraverse: [{ kind: "discover_clue", clueId: "externally_found" }] },
+    ], externalSymbols);
+    const connectionInput: MechanicsAnalysisInput = {
+      entrySceneId: "entry", initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: { phase: 0 }, npcStates: {} }, coreClueIds: [],
+      connections: [{ id: "loop", fromSceneId: "entry", toSceneId: "entry" }], discoveryLocations: { observe_external: "entry" }, maxStates: 2,
+    };
+    const connectionReport = analyzeMechanicsReachability(connection, connectionInput);
+    expect(connectionReport.reachableStateCount).toBe(2);
+    expect(connectionReport.edges.some((edge) => edge.mechanismId === "loop" && edge.afterStateHash.includes("externally_found"))).toBe(true);
+
+    const transition = compileFixture([
+      { kind: "discovery_method", id: "observe_external", clueId: "externally_found", action: "observe", target: "scene", targetId: "entry", onSuccess: [{ kind: "discover_clue", clueId: "externally_found" }] },
+      { kind: "state_transition", id: "automatic_observation", when: { kind: "state_eq", stateKey: "phase", value: 0 }, effects: [{ kind: "discover_clue", clueId: "externally_found" }] },
+    ], externalSymbols);
+    const transitionInput = { ...connectionInput, connections: [], maxStates: 2 };
+    const transitionReport = analyzeMechanicsReachability(transition, transitionInput);
+    expect(transitionReport.reachableStateCount).toBe(2);
+    expect(transitionReport.edges.map((edge) => edge.mechanismId)).toEqual(["automatic_observation"]);
+    const initial = initialMechanicsState(transitionInput);
+    const settled = settleAutomaticMechanics(transition, initial);
+    expect(settled.steps[0]?.afterStateHash).toBe(mechanicsStateHash(settled.state));
+    expect(settled.state.foundClueIds).toEqual(["externally_found"]);
+  });
+
   it("does not allow child discovery at the entry before its parent availability", () => {
     const { ir, input } = fixture();
     const report = analyzeMechanicsReachability(ir, input);
     const initialHash = mechanicsStateHash({
       currentSceneId: "scene_foyer", foundClueIds: [], visitedSceneIds: ["scene_foyer"], ownedItemIds: [], stateValues: {}, npcStates: {},
-      unlockedConnectionIds: [], failureCounts: {}, startedEncounterIds: [], rewardIds: [],
+      unlockedConnectionIds: [], failureCounts: {}, encounters: {}, startedEncounterIds: [], rewardIds: [],
     });
     expect(report.edges.some((edge) => edge.mechanismId === "discover_child" && edge.beforeStateHash === initialHash)).toBe(false);
   });
@@ -318,6 +593,37 @@ describe("Mechanics reachability", () => {
     expect(report.coreClueWitnesses.clue_core?.steps).toHaveLength(2);
   });
 
+  it("replaces a first-recorded longer stable route and propagates the shorter route to later witnesses", () => {
+    const routeSymbols: MechanicsSymbols = {
+      ...symbols,
+      clueIds: ["clue_core"],
+      sceneIds: ["scene_entry", "scene_work"],
+      connectionIds: ["a_route", "z_route"],
+      endingIds: [],
+      declaredStateKeys: ["route"],
+    };
+    const ir = compileFixture([
+      { kind: "connection_gate", id: "a_route_gate", connectionId: "a_route", onTraverse: [{ kind: "set_state", stateKey: "route", value: "long" }] },
+      { kind: "connection_gate", id: "z_route_gate", connectionId: "z_route", onTraverse: [{ kind: "set_state", stateKey: "route", value: "complete" }] },
+      { kind: "state_transition", id: "long_to_complete", when: { kind: "state_eq", stateKey: "route", value: "long" }, effects: [{ kind: "set_state", stateKey: "route", value: "complete" }] },
+      { kind: "discovery_method", id: "final_core", clueId: "clue_core", action: "search", target: "scene", targetId: "scene_work", availability: { kind: "state_eq", stateKey: "route", value: "complete" }, onSuccess: [{ kind: "discover_clue", clueId: "clue_core" }] },
+    ], routeSymbols);
+    const input: MechanicsAnalysisInput = {
+      entrySceneId: "scene_entry",
+      initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: {}, npcStates: {} },
+      coreClueIds: ["clue_core"],
+      connections: [
+        { id: "a_route", fromSceneId: "scene_entry", toSceneId: "scene_work" },
+        { id: "z_route", fromSceneId: "scene_entry", toSceneId: "scene_work" },
+      ],
+      discoveryLocations: { final_core: "scene_work" },
+      maxStates: 40,
+    };
+    const witness = analyzeMechanicsReachability(ir, input).coreClueWitnesses.clue_core!;
+    expect(witness.steps.map((step) => step.mechanismId)).toEqual(["z_route_gate", "final_core"]);
+    expect(replayMechanicsWitness(ir, input, witness).foundClueIds).toEqual(["clue_core"]);
+  });
+
   it("requires a bounded recovery strategy across every checked outcome", () => {
     const recoverySymbols: MechanicsSymbols = { ...symbols, clueIds: ["core"], sceneIds: ["entry"], connectionIds: [], endingIds: ["done"], declaredStateKeys: ["phase"] };
     const ir = compileFixture([
@@ -365,7 +671,7 @@ describe("Mechanics reachability", () => {
     const input: MechanicsAnalysisInput = { entrySceneId: "entry", initialState: { foundClueIds: [], visitedSceneIds: [], ownedItemIds: [], stateValues: { phase: 0 }, npcStates: {} }, coreClueIds: ["core"], connections: [], discoveryLocations: { late: "entry" }, maxStates: 20 };
     const report = analyzeMechanicsReachability(ir, input);
     const tampered = structuredClone(report.endingWitnesses.done!);
-    const terminalState = { currentSceneId: "entry", foundClueIds: [], visitedSceneIds: ["entry"], ownedItemIds: [], stateValues: { phase: 0 }, npcStates: {}, unlockedConnectionIds: [], failureCounts: {}, startedEncounterIds: [], rewardIds: [], terminalEndingId: "done" };
+    const terminalState = { currentSceneId: "entry", foundClueIds: [], visitedSceneIds: ["entry"], ownedItemIds: [], stateValues: { phase: 0 }, npcStates: {}, unlockedConnectionIds: [], failureCounts: {}, encounters: {}, startedEncounterIds: [], rewardIds: [], terminalEndingId: "done" };
     const afterLateAction = { ...terminalState, foundClueIds: ["core"] };
     tampered.steps.push({ mechanismId: "late", mechanismIds: ["late"], outcome: "success", beforeStateHash: mechanicsStateHash(terminalState), afterStateHash: mechanicsStateHash(afterLateAction), sourceInterpretationIds: ["accepted:late"], summary: "clue:core" });
     tampered.final = { kind: "clue", id: "core", stateHash: mechanicsStateHash(afterLateAction) };
@@ -502,7 +808,7 @@ describe("Mechanics reachability", () => {
     });
     expect(report.edges.some((edge) => edge.mechanismId === "leave_start" && edge.beforeStateHash === mechanicsStateHash({
       currentSceneId: "scene_start", foundClueIds: [], visitedSceneIds: ["scene_start"], ownedItemIds: [], stateValues: {}, npcStates: {},
-      unlockedConnectionIds: [], failureCounts: {}, startedEncounterIds: [], rewardIds: [],
+      unlockedConnectionIds: [], failureCounts: {}, encounters: {}, startedEncounterIds: [], rewardIds: [],
     }))).toBe(false);
     expect(report.endingWitnesses.ending_escaped?.steps.map((edge) => edge.mechanismId)).toEqual(["find_key", "leave_start", "rule_escape"]);
   });

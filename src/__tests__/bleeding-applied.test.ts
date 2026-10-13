@@ -10,30 +10,47 @@
 
 import { describe, test, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
+import type { WorldEntity } from "../types";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 512, temperature: 0.7,
 };
 
-type Ent = { id: string; name: string; type: string; hp: number; maxHp: number; ac: number; status: string[]; position: string };
-type W = { upsertEntity: (e: unknown) => void; getCurrentState: () => { entities: Record<string, Ent> } };
+type Ent = WorldEntity;
 
 /**
  * 钉住随机序列走完一次攻击。
  * 消耗顺序：命中骰 → 伤害骰 → checkMajorWound 的 [部位, 骨折, 昏迷]。
  */
 async function attack(seq: number[], hp: number, extra?: Ent[], input = "攻击 怪物") {
-  const s = new GameSession(`bl-${Math.random()}`, "cosmic-horror", CFG);
-  await s.act("创建角色 investigator 甲");
-  const w = (s as unknown as { world: W }).world;
-  w.upsertEntity({ id: "mon1", name: "怪物", type: "monster", hp, maxHp: hp, ac: 10, status: [], position: "tavern" });
-  for (const e of extra ?? []) w.upsertEntity(e);
+  const s = new GameSession(
+    `bl-${Math.random()}`,
+    "cosmic-horror",
+    CFG,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "preferred",
+    { careerEntryPersistence: "transient" },
+  );
+  restoreSignedOrdinaryWorld(s, CFG, (world) => {
+    world.upsertEntity({ id: "mon1", name: "怪物", type: "monster", hp, maxHp: hp, ac: 10, status: [], position: "tavern" });
+    for (const entity of extra ?? []) world.upsertEntity(entity);
+  });
   const real = Math.random;
   let i = 0;
   Math.random = () => seq[Math.min(i++, seq.length - 1)]!;
-  try { await s.act(input); } finally { Math.random = real; }
-  return w.getCurrentState().entities;
+  try {
+    await s.act(input);
+    return s.world.getCurrentState().entities;
+  } finally {
+    Math.random = real;
+    s.close();
+  }
 }
 
 const CRIT_MAJOR = [0, 0, 0.5, 0.9]; // 暴击 6 点伤害 + 部位躯干 + 不骨折

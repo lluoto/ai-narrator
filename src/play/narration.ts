@@ -7,6 +7,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PlayerDecision } from "../agent/player-agent";
 import type { WoundSeverity } from "../combat/wound-effects";
+import type { LLMClient } from "../llm/client";
 import type { PlayEvent } from "./events";
 
 /**
@@ -36,6 +37,8 @@ export type Decider = (context: string, options: string[]) => Promise<PlayerDeci
  * （包括定义在别的文件里的辅助函数）自动拿到本局的那一份。
  */
 export interface RunContext {
+  /** The sole LLM client for this play-module run; null explicitly means offline. */
+  llmClient?: LLMClient | null;
   lines: string[];
   /** 与 lines 逐项对应，同进同出 */
   origins: LineOrigin[];

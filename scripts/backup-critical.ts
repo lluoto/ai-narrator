@@ -11,7 +11,7 @@
 // 复制而不是压缩：这些多半已经是压缩格式（epub/pdf/docx），
 // 再压一遍省不下多少，却让「随手翻一个文件出来看」变麻烦。
 
-import { readdirSync, statSync, mkdirSync, copyFileSync, existsSync, writeFileSync } from "fs";
+import { readdirSync, statSync, lstatSync, mkdirSync, copyFileSync, existsSync, writeFileSync } from "fs";
 import { join, extname, dirname } from "path";
 
 const ROOT = "C:\\aitrpg";
@@ -51,7 +51,12 @@ function walk(dir: string, depth = 0) {
     if (["node_modules", ".git", "dist", "__pycache__", ".pytest_cache"].includes(n)) continue;
     const p = join(dir, n);
     let st;
-    try { st = statSync(p); } catch { continue; }
+    try {
+      // C:\aitrpg\世界模型 is a compatibility junction to the D: dataset.
+      // Do not walk it a second time or backup the same corpus twice.
+      if (lstatSync(p).isSymbolicLink()) continue;
+      st = statSync(p);
+    } catch { continue; }
     if (st.isDirectory()) { walk(p, depth + 1); continue; }
     const kind = isCritical(p, n);
     if (kind) hits.push({ src: p, rel: p.replace(ROOT + "\\", ""), size: st.size, kind });

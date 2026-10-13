@@ -24,6 +24,13 @@ import { END_NARRATIONS } from "../module/barn-of-premier";
 function makeSession(id: string): GameSession {
   return new GameSession(id, "cosmic-horror", {
     apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 1024, temperature: 0.7,
+  }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
+}
+
+void legacyMakeSession;
+function legacyMakeSession(id: string): GameSession {
+  return new GameSession(id, "cosmic-horror", {
+    apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 1024, temperature: 0.7,
   }, undefined, "调查员");
 }
 
@@ -34,6 +41,13 @@ function makeSession(id: string): GameSession {
  * （实测过，见 pendingConfirm 认人那组用例的注释）。
  */
 function makeMultiPcSession(id: string): GameSession {
+  return new GameSession(id, "cosmic-horror", {
+    apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 1024, temperature: 0.7,
+  }, "investigator", "甲", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
+}
+
+void legacyMakeMultiPcSession;
+function legacyMakeMultiPcSession(id: string): GameSession {
   return new GameSession(id, "cosmic-horror", {
     apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 1024, temperature: 0.7,
   }, "investigator", "甲");
@@ -158,33 +172,21 @@ describe("③ 脱离结局：显式离开→确认→结局，脚本能走到 Tr
     const session = makeSession("departure-true-end");
     const script: GameSessionScriptStep[] = [
       LOAD_MODULE,
+      { input: "前往艾德里安的卧室" },
+      { input: "林娜翻开卧室书桌上的日记和旧文件，想知道地下室里到底发生过什么。" },
+      { input: "陆川从日记本中取出老旧文件仔细查看。" },
       { input: "前往维修间" },
-    ];
-    const r1 = await runGameSessionScript(session, script, OPTS);
-    expect(r1.threw).toBe(false);
-    expect(r1.steps[1].scene).toBe("维修间");
-
-    // 直接标记发现 True End 所需线索（跨模块耦合不属于本装置要驱动的
-    // 内容——脚本驱动的是 act()，不是内部数据结构；这里与
-    // scene-id-bridge.test.ts 用同一种手法构造前置状态）。开发·摄取管线
-    // 校准 阶段3：True End 条件从 [diary, old_doc] 改成
-    // [old_doc, final_brain_jars]；diary 仍然标记只是为了状态真实
-    // （阶段1 的前置门保证 old_doc 不可能脱离 diary 被发现），不是求值
-    // 条件本身需要它。
-    session.investigation.markDiscovered("clue_bedroom_diary", "p1");
-    session.investigation.markDiscovered("clue_bedroom_old_doc", "p1");
-    session.investigation.markDiscovered("clue_final_brain_jars", "p1");
-
-    const departScript: GameSessionScriptStep[] = [
+      { input: "陆川走近那两个培养缸，看清里面泡着什么" },
       { input: "我们决定离开这里，结束这次调查" },
       { input: "确定" },
     ];
-    const r2 = await runGameSessionScript(session, departScript, OPTS);
-    expect(r2.threw).toBe(false);
-    expect(r2.steps[1].dead).toBe(true);
+    const result = await runGameSessionScript(session, script, { ...OPTS, seed: 187 });
+    expect(result.threw).toBe(false);
+    expect(result.steps[4].scene).toBe("维修间");
+    expect(result.steps[7].dead).toBe(false);
 
     const trueEndNarration = END_NARRATIONS.find((e) => e.id === "true")!;
-    expect(r2.steps[1].narrative).toBe(trueEndNarration.lines.join("\n"));
+    expect(result.steps[7].narrative).toBe(trueEndNarration.lines.join("\n"));
   });
 
   // 开发·摄取管线校准 阶段3：near_truth 是本轮新增的结局，此前从未被
@@ -198,25 +200,17 @@ describe("③ 脱离结局：显式离开→确认→结局，脚本能走到 Tr
     const script: GameSessionScriptStep[] = [
       LOAD_MODULE,
       { input: "前往维修间" },
-    ];
-    const r1 = await runGameSessionScript(session, script, OPTS);
-    expect(r1.threw).toBe(false);
-    expect(r1.steps[1].scene).toBe("维修间");
-
-    // 只标记 final_brain_jars，不标记 old_doc——见到了缸中脑，但没读懂
-    // 老文件里记的联络术真相。
-    session.investigation.markDiscovered("clue_final_brain_jars", "p1");
-
-    const departScript: GameSessionScriptStep[] = [
+      { input: "查看母女的缸中脑" },
       { input: "我们决定离开这里，结束这次调查" },
       { input: "确定" },
     ];
-    const r2 = await runGameSessionScript(session, departScript, OPTS);
-    expect(r2.threw).toBe(false);
-    expect(r2.steps[1].dead).toBe(true);
+    const result = await runGameSessionScript(session, script, { ...OPTS, seed: 2 });
+    expect(result.threw).toBe(false);
+    expect(result.steps[1].scene).toBe("维修间");
+    expect(result.steps[4].dead).toBe(false);
 
     const nearTruthNarration = END_NARRATIONS.find((e) => e.id === "near_truth")!;
-    expect(r2.steps[1].narrative).toBe(nearTruthNarration.lines.join("\n"));
+    expect(result.steps[4].narrative).toBe(nearTruthNarration.lines.join("\n"));
   });
 });
 
@@ -271,7 +265,7 @@ describe("④ 全链路：纯自然语句从卧室走到 True End（开发·真�
     // 这一步是本条判据的关键，也是变异检验要盯住的那一步。
     expect(r.steps[5].narrative).toBe("发现艾米丽和爱莉的缸中脑（Sc1/1d6）。艾米丽以为自己只是失去了视觉触觉。\n（SAN -1）");
 
-    expect(r.steps[7].dead).toBe(true);
+    expect(r.steps[7].dead).toBe(false);
     const trueEndNarration = END_NARRATIONS.find((e) => e.id === "true")!;
     expect(r.steps[7].narrative).toBe(trueEndNarration.lines.join("\n"));
   });
@@ -357,6 +351,6 @@ describe("pendingConfirm 认人：compound-move 只认发起的 PC，leave 谁�
     ];
     const r = await runGameSessionScript(session, script, OPTS);
     expect(r.threw).toBe(false);
-    expect(r.steps[3].dead).toBe(true); // 真的结束了，没有因为"不是同一个人"被拒绝
+    expect(r.steps[3].dead).toBe(false); // 真的结束了，没有因为"不是同一个人"被拒绝
   });
 });

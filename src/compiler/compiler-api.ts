@@ -11,10 +11,11 @@ import {
 import { CompilerQuestionError, buildCompilerQuestionQueue, type CompilerQuestion, type ModuleCompileHints } from "./compiler-question-queue";
 import { compileDeterministicTemplates } from "./deterministic-template-compiler";
 import { buildSourceFactGraph, type SourceFactGraph } from "./source-fact-graph";
-import { cleanPageWithTrace, joinPagesWithTrace } from "../ingest/clean-text";
+import { buildPreparedSourceFactDispositionReport } from "./source-fact-disposition";
+import { cleanPagesWithTrace, joinPagesWithTrace } from "../ingest/clean-text";
 import { buildDocumentBlocks } from "../ingest/document-blocks";
 import { createSyntheticDocumentIR, type DocumentIR } from "../ingest/document-ir";
-import { buildDocumentIR } from "../ingest/pdf-source";
+import { buildDocumentIR, PdfTextUnavailableError } from "../ingest/pdf-source";
 
 export type CompilerSourceInput =
   | { kind: "synthetic_pages"; moduleId: string; sourceDescriptor: string; pages: string[] }
@@ -23,6 +24,7 @@ export type CompilerSourceInput =
 export type CompilerApiRefusalCode =
   | "PREPARE_INVALID_INPUT"
   | "PREPARE_PDF_INVALID"
+  | "PDF_TEXT_UNAVAILABLE"
   | "PREPARE_FAILED"
   | "RESOLVE_ARTIFACT_INVALID"
   | "RESOLVE_PREPARED_ARTIFACT_REQUIRED"
@@ -78,7 +80,7 @@ function refusal(stage: CompilerApiRefusal["stage"], code: CompilerApiRefusalCod
 }
 
 function prepareFromDocument(moduleId: string, document: DocumentIR): PreparedCompilerApiResult {
-  const blocks = buildDocumentBlocks(document, joinPagesWithTrace(document.pages.map(cleanPageWithTrace)));
+  const blocks = buildDocumentBlocks(document, joinPagesWithTrace(cleanPagesWithTrace(document.pages)));
   const graph: SourceFactGraph = buildSourceFactGraph(document, blocks);
   const draft = compileDeterministicTemplates(graph, { moduleId });
   const preparedQueue = buildCompilerQuestionQueue(graph, draft);
@@ -92,6 +94,7 @@ function prepareFromDocument(moduleId: string, document: DocumentIR): PreparedCo
     graph,
     draft,
     preparedQueue,
+    sourceFactDispositionReport: buildPreparedSourceFactDispositionReport(graph, draft, preparedQueue),
   });
   const payload = artifact.payload;
   return { status: "prepared", identity: payload.identity, artifact, questions: payload.preparedQueue.questions };
@@ -110,6 +113,9 @@ export async function prepareCompilerArtifact(input: CompilerSourceInput): Promi
     if (input.pdfBytes.length === 0) return refusal("prepare", "PREPARE_PDF_INVALID", "PDF bytes must be non-empty");
     return prepareFromDocument(input.moduleId, await buildDocumentIR(input.pdfBytes));
   } catch (error) {
+    if (input.kind === "pdf_bytes" && error instanceof PdfTextUnavailableError) {
+      return refusal("prepare", "PDF_TEXT_UNAVAILABLE", error);
+    }
     return refusal("prepare", input.kind === "pdf_bytes" ? "PREPARE_PDF_INVALID" : "PREPARE_FAILED", error);
   }
 }

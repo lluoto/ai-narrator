@@ -41,9 +41,10 @@
 //
 // 用法：bun scripts/diag/probe-llm-intent.ts
 
-import { loadConfig } from "../../src/config";
+import { loadConfig, type LLMConfig } from "../../src/config";
 import { LLMClient } from "../../src/llm/client";
-import { setIntentLLM, parseIntent } from "../../src/llm/intent";
+import { isUsableLlmApiKey, llmDisabledByOverride } from "../../src/llm/enabled";
+import { resolveNormalSessionIntent } from "../../src/llm/intent";
 import { writeReport } from "../../src/diagnostics/report";
 import { GameSession } from "../../src/api/game-session";
 
@@ -54,7 +55,7 @@ interface ActionCase {
   readonly note?: string;
 }
 
-interface ResultCase {
+export interface ResultCase {
   readonly kind: "result";
   readonly input: string;
   /** 结果导向：这句话最终必须让这条线索被发现——不问中途 action 判成了什么。 */
@@ -128,33 +129,61 @@ const CONTROL_CASES: ActionCase[] = [
 
 const ALL_CASES: Case[] = [...COVERAGE_CASES, ...OBJECT_CASES, ...CONTROL_CASES];
 
-const SESSION_CFG = {
-  apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
-  model: "mock", maxTokens: 128, temperature: 0,
-};
+/**
+ * Result-oriented simulated play must use the same configured server-side
+ * model endpoint as the diagnostic. Natural language is required to resolve
+ * through that client; a model failure is evidence of an unavailable probe,
+ * never permission to substitute the regex parser.
+ */
+export function createRequiredProbeSession(id: string, config: LLMConfig): GameSession {
+  return new GameSession(
+    id,
+    "cosmic-horror",
+    config,
+    "investigator",
+    "甲",
+    undefined,
+    undefined,
+    undefined,
+    "required",
+  );
+}
+
+/** The action-only rows are diagnostic evidence too, so they must not silently become regex guesses. */
+async function resolveRequiredDiagnosticAction(input: string, client: LLMClient): Promise<string> {
+  const resolution = await resolveNormalSessionIntent(input, client, "required");
+  if (resolution.status === "resolved") return resolution.intent.action;
+  return `<${resolution.status}: ${resolution.errorCode}>`;
+}
 
 /**
  * 结果导向用例的判定：真的走一遍 GameSession.act()，看目标线索有没有
  * 被发现。每条用例用一个全新的会话（互不污染已发现状态），锁定骰子只
  * 隔离"路由对不对"，不隔离"LLM 分类准不准"。
  */
-async function runResultCase(c: ResultCase): Promise<{ got: string; ok: boolean }> {
-  process.env.LLM_API_KEY = "";
-  process.env.OPENAI_API_KEY = "";
-  const session = new GameSession(`probe-${Math.random()}`, "cosmic-horror", SESSION_CFG, "investigator", "甲") as any;
+export async function runResultCase(
+  c: ResultCase,
+  config: LLMConfig,
+  classifier: LLMClient,
+): Promise<{ got: string; ok: boolean }> {
+  const session = createRequiredProbeSession(`probe-${Math.random()}`, config) as any;
   await session.act("加载模组 普瑞米尔的谷仓");
   session.movePlayerToScene("中控室");
 
-  let action = "<异常>";
+  let action: string;
   try {
-    const intent = await parseIntent(c.input);
-    action = intent.action;
-  } catch { /* 辅助信息拿不到就算了，不影响结果判定 */ }
+    action = await resolveRequiredDiagnosticAction(c.input, classifier);
+  } catch (error) {
+    action = `<exception: ${error instanceof Error ? error.message.slice(0, 60) : String(error).slice(0, 60)}>`;
+  }
 
   const real = Math.random;
   Math.random = () => 0; // 只锁骰子，不锁 LLM 分类——见文件头注释
   try {
-    await session.act(c.input, "p1");
+    const response = await session.act(c.input, "p1");
+    if (response.error) {
+      return { got: `action=${action}, execution=${response.error.code}, discovered=false`, ok: false };
+    }
   } finally { Math.random = real; }
 
   const discovered: boolean = session.investigation.isDiscoveredBy(c.wantClueId, "p1");
@@ -163,8 +192,8 @@ async function runResultCase(c: ResultCase): Promise<{ got: string; ok: boolean 
 
 async function main() {
   const cfg = loadConfig();
-  const hasKey = cfg.apiKey !== "sk-placeholder" && !cfg.apiKey.startsWith("${");
-  const disabled = process.env.LLM_DISABLED === "true";
+  const hasKey = isUsableLlmApiKey(cfg.apiKey);
+  const disabled = llmDisabledByOverride();
 
   const out: string[] = ["# LLM 意图解析准确率探针", ""];
   out.push(`- 时间：${new Date().toISOString().slice(0, 19).replace("T", " ")}`);
@@ -190,7 +219,7 @@ async function main() {
 
   // 熔断是进程级静态变量，探针里先复位，免得被同进程里的历史失败带偏。
   LLMClient.resetDefeat();
-  setIntentLLM(new LLMClient(cfg));
+  const classifier = new LLMClient(cfg);
 
   type Row = { input: string; want: string; got: string; ok: boolean; note?: string; kind: Case["kind"] };
   const rows: Row[] = [];
@@ -198,15 +227,14 @@ async function main() {
     if (c.kind === "action") {
       let got = "<异常>";
       try {
-        const intent = await parseIntent(c.input);
-        got = intent.action;
+        got = await resolveRequiredDiagnosticAction(c.input, classifier);
       } catch (e) {
         got = `<异常: ${e instanceof Error ? e.message.slice(0, 60) : String(e).slice(0, 60)}>`;
       }
       rows.push({ input: c.input, want: c.wantAction, got, ok: got === c.wantAction, note: c.note, kind: "action" });
     } else {
       try {
-        const { got, ok } = await runResultCase(c);
+        const { got, ok } = await runResultCase(c, cfg, classifier);
         rows.push({ input: c.input, want: `发现 ${c.wantClueId}`, got, ok, note: c.note, kind: "result" });
       } catch (e) {
         rows.push({
@@ -246,4 +274,4 @@ async function main() {
   process.exit(0);
 }
 
-main();
+if (import.meta.main) void main();

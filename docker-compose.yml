@@ -6,14 +6,45 @@ services:
     environment:
       - PORT=3099
       - NODE_ENV=production
+      # Strict positive decimal minutes; default is 30 when omitted.
+      - SESSION_TIMEOUT_MINUTES=${SESSION_TIMEOUT_MINUTES:-30}
+      - ORDINARY_SESSION_WEBSOCKET_MAX_CONNECTIONS=${ORDINARY_SESSION_WEBSOCKET_MAX_CONNECTIONS:-512}
+      - ORDINARY_SESSION_WEBSOCKET_MAX_CONNECTIONS_PER_SESSION=${ORDINARY_SESSION_WEBSOCKET_MAX_CONNECTIONS_PER_SESSION:-4}
+      - ORDINARY_SESSION_WEBSOCKET_MAX_CONNECTIONS_PER_PRINCIPAL=${ORDINARY_SESSION_WEBSOCKET_MAX_CONNECTIONS_PER_PRINCIPAL:-32}
+      - ORDINARY_SESSION_CREATE_MAX_CONCURRENT=${ORDINARY_SESSION_CREATE_MAX_CONCURRENT:-2}
+      - ORDINARY_SESSION_CREATE_MAX_CONCURRENT_PER_PRINCIPAL=${ORDINARY_SESSION_CREATE_MAX_CONCURRENT_PER_PRINCIPAL:-1}
+      - ORDINARY_SESSION_CREATE_STARTS_PER_PRINCIPAL=${ORDINARY_SESSION_CREATE_STARTS_PER_PRINCIPAL:-4}
+      - ORDINARY_SESSION_CREATE_WINDOW_SECONDS=${ORDINARY_SESSION_CREATE_WINDOW_SECONDS:-60}
+      # Disabled by default. Enabling this atomic pair requires a Compose
+      # override that bind-mounts both host paths read-only inside /app.
+      - COMPILED_CTHULHU_WORLD_MODEL_POLICY_PATH=${COMPILED_CTHULHU_WORLD_MODEL_POLICY_PATH:-}
+      - CTHULHU_DATASET_PATH=${CTHULHU_DATASET_PATH:-}
       # LLM 凭据从宿主环境或 .env 传入，不烘进镜像。
-      # 缺失时服务照常起，但叙事会退化成本地兜底的短句。
+      # 缺失时服务照常起，叙事可退化成本地短句；普通 HTTP action 的
+      # intent 默认 required，会稳定返回 503，不能静默改走 regex。
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_BASE_URL=${LLM_BASE_URL}
       - LLM_MODEL=${LLM_MODEL}
+      # Only exact development_fallback with NODE_ENV development/test permits compatibility.
+      - ORDINARY_SESSION_INTENT_POLICY=${ORDINARY_SESSION_INTENT_POLICY:-required}
+      # Compiler control-plane credentials are separate from LLM credentials.
+      - COMPILER_OPERATOR_BEARER_TOKEN=${COMPILER_OPERATOR_BEARER_TOKEN}
+      - COMPILER_KEEPER_BEARER_TOKEN=${COMPILER_KEEPER_BEARER_TOKEN}
+      # Required ordinary-session owner auth. development_anonymous is allowed
+      # only with NODE_ENV exactly development/test; a shared bearer is one service account, not IdP.
+      - ORDINARY_SESSION_AUTH_MODE=${ORDINARY_SESSION_AUTH_MODE:-required}
+      # Optional single-P1 browser delivery; absent/invalid secret stays owner-only.
+      - COMPILER_PLAYER_DELIVERY_HMAC_SECRET=${COMPILER_PLAYER_DELIVERY_HMAC_SECRET}
+      - COMPILER_PLAYER_DELIVERY_INVITE_TTL_SECONDS=${COMPILER_PLAYER_DELIVERY_INVITE_TTL_SECONDS:-900}
+      - COMPILER_PLAYER_DELIVERY_COOKIE_TTL_SECONDS=${COMPILER_PLAYER_DELIVERY_COOKIE_TTL_SECONDS:-604800}
+      - COMPILER_PLAYER_DELIVERY_ROOT=/app/data/compiled-player-delivery
+      # Optional public browser origin behind a TLS-terminating trusted proxy.
+      - COMPILER_PUBLIC_ORIGIN=${COMPILER_PUBLIC_ORIGIN}
     volumes:
       # 会话存档、模组 JSON、SQLite 库
       - trpg_data:/app/data
+    stop_signal: SIGTERM
+    stop_grace_period: 20s
     restart: unless-stopped
 
 volumes:

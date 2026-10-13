@@ -15,21 +15,39 @@ import { describe, it, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
 import { runSuggestions } from "../api/server";
 import { parseIntent } from "../llm/intent";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 128, temperature: 0,
 };
+const TRANSIENT_RUNTIME = { careerEntryPersistence: "transient" } as const;
 
-async function barnAt(scene: string): Promise<GameSession & Record<string, any>> {
+async function barnAt(scene: string): Promise<GameSession> {
   process.env.LLM_API_KEY = "";
   process.env.OPENAI_API_KEY = "";
   // p1 要有真实角色卡，才能用 pcId 路由；无 archetype 的构造分支是空壳 p1，
   // 见 game-session-run-harness.test.ts 多 PC helper 的同一限制。
-  const session: any = new GameSession(`suggestions-${Math.random()}`, "cosmic-horror", CFG, "investigator", "甲");
+  const session = new GameSession(`suggestions-${Math.random()}`, "cosmic-horror", CFG, "investigator", "甲", undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME);
   await session.act("加载模组 普瑞米尔的谷仓");
-  session.movePlayerToScene(scene);
+  if (!activateRegisteredGameSessionSceneForTest(session, scene)) throw new Error(`fixture scene could not be activated: ${scene}`);
   return session;
+}
+
+function restoreBarnWorld(
+  source: GameSession,
+  configure: (world: import("../state/world-state-manager").WorldStateManager) => void,
+): GameSession {
+  const restored = new GameSession(source.id, "cosmic-horror", CFG, undefined, undefined, undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME);
+  try {
+    restoreSignedOrdinaryWorld(restored, CFG, configure, source);
+  } catch (error) {
+    restored.close();
+    throw error;
+  }
+  source.close();
+  return restored;
 }
 
 function systemText(res: Awaited<ReturnType<GameSession["act"]>>): string {
@@ -38,7 +56,7 @@ function systemText(res: Awaited<ReturnType<GameSession["act"]>>): string {
 
 describe("真实场景行动锚点", () => {
   it("维森酒吧：只展示真实在场 NPC、真实出口和可执行搜索动作，不泄露未发现线索名称", async () => {
-    const session = await barnAt("维森酒吧");
+    let session = await barnAt("维森酒吧");
     const suggestions = session.getSuggestions("p1");
     const undiscovered = session.investigation.getUndiscoveredSceneClues("维森酒吧", "p1");
 
@@ -47,7 +65,7 @@ describe("真实场景行动锚点", () => {
     expect(suggestions).toContain("与 酒吧保镖 交谈");
     expect(suggestions).toContain("前往 普瑞米尔");
     for (const clueId of undiscovered) {
-      const clue = (session.investigation as any).clueTypes.get(clueId);
+      const clue = session.investigation.getClueMatchInfo(clueId);
       const text = suggestions.join("\n");
       expect(text).not.toContain(clueId);
       // displayName 是玩家侧名字；id 不泄露还不够，不能把「酒吧预订记录」
@@ -57,11 +75,13 @@ describe("真实场景行动锚点", () => {
   });
 
   it("同一真实场景按 PC 查私密线索：p1 全部发现后只环顾，p2 仍得到仔细搜查", async () => {
-    const session = await barnAt("维森酒吧");
+    let session = await barnAt("维森酒吧");
     await session.act("创建队友 乙 investigator");
     const p1Undiscovered = session.investigation.getUndiscoveredSceneClues("维森酒吧", "p1");
     expect(p1Undiscovered.length).toBeGreaterThan(0);
-    for (const clueId of p1Undiscovered) session.investigation.markDiscovered(clueId, "p1");
+    session = restoreBarnWorld(session, (world) => {
+      for (const clueId of p1Undiscovered) world.recordClueDiscovery("p1", clueId);
+    });
 
     const p1Suggestions = session.getSuggestions("p1");
     const p2Suggestions = session.getSuggestions("p2");
@@ -72,9 +92,8 @@ describe("真实场景行动锚点", () => {
   });
 
   it("空场景/无出口场景不崩也不编造行动", async () => {
-    const session = await barnAt("特里坎家");
-    session.world.registerScene("empty-anchor-test", "空场景");
-    (session as any).movePlayerToScene("empty-anchor-test");
+    const session = new GameSession("suggestions-empty-anchor", "cosmic-horror", CFG, "investigator", "甲", undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME);
+    expect((await session.act("前往 empty-anchor-test")).error).toBeUndefined();
     expect(session.getSuggestions("p1")).toEqual(["环顾四周"]);
   });
 });
@@ -108,10 +127,12 @@ describe("建议往返：真实 suggestions 原样回传 act()，均不报错、
 
 describe("GET /suggestions 的 pcId 路由", () => {
   it("显式 p2 只读取 p2 的建议，不切换 activePlayerId；不传仍保持 active PC 行为", async () => {
-    const session = await barnAt("维森酒吧");
+    let session = await barnAt("维森酒吧");
     await session.act("创建队友 乙 investigator");
     const clues = session.investigation.getUndiscoveredSceneClues("维森酒吧", "p1");
-    for (const clueId of clues) session.investigation.markDiscovered(clueId, "p1");
+    session = restoreBarnWorld(session, (world) => {
+      for (const clueId of clues) world.recordClueDiscovery("p1", clueId);
+    });
     expect(session.activePlayerId).toBe("p1");
 
     const forP2 = runSuggestions(session, "p2");
@@ -135,7 +156,13 @@ describe("GET /suggestions 的 pcId 路由", () => {
 describe("战斗回归：四条建议逐字保持", () => {
   it("combatActive 时不混入场景锚点", async () => {
     const session = await barnAt("维森酒吧");
-    session.combatActive = true;
+    const originalRandom = Math.random;
+    Math.random = () => 0.99;
+    try {
+      expect((await session.act("攻击 酒吧保镖")).error).toBeUndefined();
+    } finally {
+      Math.random = originalRandom;
+    }
     expect(session.getSuggestions("p1")).toEqual([
       "⚔️ 攻击敌人", "🛡️ 防御", "💊 使用物品", "🏃 撤退",
     ]);
@@ -175,7 +202,7 @@ describe("行动锚点不把 NPC 当地点（任务4，步骤 2a-2/2a-3 根因�
 
   it("普瑞米尔（NPC 过滤的判据不是「description 为空」）：农场外围、报亭这类真地点一个不少", async () => {
     const session = await barnAt("特里坎家");
-    (session as any).movePlayerToScene("普瑞米尔");
+    expect(activateRegisteredGameSessionSceneForTest(session, "普瑞米尔")).toBe(true);
     const suggestions = session.getSuggestions("p1");
     // 农场外围、报亭本身没写场景描述，跟"菲碧_特里坎"表面特征相似
     // （都是"平平无奇的字符串"），但它们是真场景，不该被 NPC 过滤误伤。

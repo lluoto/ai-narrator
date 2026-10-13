@@ -46,6 +46,21 @@ describe("圣杯裁决 — 攻击方不是世界实体", () => {
     expect(typeof r.damage).toBe("number");
     expect(["kill", "wound", "miss"]).toContain(r.result);
   });
+
+  it("无效字符串位阶在真实路由攻击中回落而不崩溃", () => {
+    const engine = new RulesEngine();
+    const attacker = { ...playerSheet(), name: "黄金调查员", attributes: { rank: "platinum" } };
+    const r = engine.adjudicateAttack(
+      { action: "attack", target: "m1" },
+      attacker,
+      entity(),
+      "grail",
+    );
+
+    expect(r.ruleset).toBe("grail");
+    expect(typeof r.hit).toBe("boolean");
+    expect(["kill", "wound", "miss"]).toContain(r.result);
+  });
 });
 
 describe("inferRank — 只依赖它真正读的字段", () => {
@@ -80,6 +95,22 @@ describe("inferRank — 只依赖它真正读的字段", () => {
 describe("inferGrailRank — 位阶推断的唯一实现", () => {
   it("字符串 rank 优先于名字", () => {
     expect(inferGrailRank({ name: "传奇的骑士", attributes: { rank: "iron" } })).toBe("iron");
+  });
+
+  it("只接受声明的五个字符串位阶", () => {
+    const validRanks = ["bronze", "iron", "silver", "gold", "legendary"] as const;
+    for (const rank of validRanks) {
+      expect(inferGrailRank({ name: "无名小卒", attributes: { rank } })).toBe(rank);
+    }
+  });
+
+  it("无效字符串 rank 回落到名字与 status 的既有优先级", () => {
+    expect(inferGrailRank({ name: "黄金位阶守卫", attributes: { rank: "platinum" } })).toBe("gold");
+    expect(inferGrailRank({ name: "守卫", status: ["白银"], attributes: { rank: "platinum" } })).toBe("silver");
+  });
+
+  it("没有合法位阶提示时，无效字符串 rank 回落到青铜", () => {
+    expect(inferGrailRank({ name: "无名小卒", attributes: { rank: "platinum" } })).toBe("bronze");
   });
 
   it("数值 rank 不算位阶，回落到名字与 status", () => {

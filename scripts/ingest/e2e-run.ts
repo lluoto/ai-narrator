@@ -5,9 +5,11 @@
 // 摄取产物与 runModule 之间没有任何通路。
 // 指标再好看也不等于跑得起来 —— 这个脚本就是把那一步补上。
 //
-// 判据只有两条，都很朴素：
-//   1. 引擎不崩，能开始
-//   2. 调查员真的从一个场景走到了另一个场景（看 onLine 里的场景切换）
+// 报告明确区分三种结果：
+//   1. 引擎崩溃；
+//   2. 调查员真的从一个场景走到了另一个场景的 movement smoke（看 onLine）；
+//   3. 有 runModule 的结构化 ending 事件且正常返回的 terminal completion。
+// 只有第 3 种可称 completed playthrough；动作上限与超时也都是失败，不吞掉。
 //
 // 开发·摄取管线校准 阶段4：原先躺在 `tools/_e2e-ingested-module.ts`，
 // `tools/` 在 .gitignore 里——它依赖的 `neutralSupport` 因此在编译器眼里
@@ -21,15 +23,27 @@
 // 用法：bun scripts/ingest/e2e-run.ts [module.json 路径]
 //   不传参数时缺省指向 scripts/ingest/run.ts 的默认落盘位置
 //   （该脚本自己的输出目录，是派生物，不进版本库）。
+//   Pass --out <directory> (or INGEST_OUT) to check a non-default ingest output.
 
 import { runModule } from "../../src/play-module";
-import { neutralSupport } from "../../src/ingest/assemble-module";
 import type { ModuleData } from "../../src/module/types";
 import type { PlayerDecision } from "../../src/agent/player-agent";
 import { writeReport } from "../../src/diagnostics/report";
 import { existsSync } from "fs";
+import { parseE2ERunConfig } from "./cli-config";
+import {
+  classifyE2ERun,
+  selectE2ESupport,
+  type E2ERunStop,
+  type TerminalEndingEvidence,
+} from "./e2e-result";
 
-const modulePath = process.argv[2] ?? "tools/ingest-out/module.json";
+const parsedConfig = parseE2ERunConfig(process.argv.slice(2), process.env);
+if (!parsedConfig.ok) {
+  console.error(parsedConfig.message);
+  process.exit(2);
+}
+const { modulePath } = parsedConfig.config;
 if (!existsSync(modulePath)) {
   console.error(
     `找不到摄取产物：${modulePath}\n` +
@@ -40,12 +54,15 @@ if (!existsSync(modulePath)) {
 }
 
 const mod = (await Bun.file(modulePath).json()) as ModuleData;
+const supportSelection = selectE2ESupport(mod.id);
 const sceneNames = new Set(mod.scenes.map((s) => s.name));
 
 const lines: string[] = [];
 let decisions = 0;
 const visited = new Set<string>();
-let failure = "";
+let stop: E2ERunStop = "returned";
+let crash = "";
+let terminalEnding: TerminalEndingEvidence | null = null;
 /** 每次决策看到的选项，用来判断引擎到底有没有给出「可以走」这个选择 */
 const optionLog: string[] = [];
 
@@ -70,13 +87,19 @@ function decide(_context: string, options: string[]): PlayerDecision {
 }
 
 const MAX = 40;
+let timeoutId: ReturnType<typeof setTimeout> | undefined;
 try {
   await Promise.race([
-    runModule(mod, neutralSupport(), {
+    runModule(mod, supportSelection.support, {
       onLine: (line: string) => {
         lines.push(line);
         const flat = line.replace(/\s+/g, "");
         for (const [k, name] of sceneByDesc) if (k.length > 8 && flat.includes(k)) visited.add(name);
+      },
+      onEvent: (event) => {
+        if (event.type === "ending") {
+          terminalEnding = { id: event.id, label: event.label };
+        }
       },
       decide: (context: string, options: string[]) => {
         if (decisions >= MAX) throw new Error(`__STOP__`); // 没有 endings，得自己叫停
@@ -85,11 +108,32 @@ try {
       },
     }),
     // 兜底：中性 support 没有结局评估，模组不会自行结束。
-    new Promise((_, rej) => setTimeout(() => rej(new Error("__TIMEOUT__")), 120_000)),
+    new Promise((_, rej) => {
+      timeoutId = setTimeout(() => rej(new Error("__TIMEOUT__")), 120_000);
+    }),
   ]);
 } catch (err) {
   const m = err instanceof Error ? err.message : String(err);
-  if (m !== "__STOP__" && m !== "__TIMEOUT__") failure = m;
+  if (m === "__STOP__") stop = "action-limit";
+  else if (m === "__TIMEOUT__") stop = "timeout";
+  else {
+    stop = "engine-crash";
+    crash = m;
+  }
+} finally {
+  if (timeoutId !== undefined) clearTimeout(timeoutId);
+}
+
+const result = classifyE2ERun({
+  stop,
+  moved: visited.size > 1,
+  terminalEnding,
+});
+
+function describeTerminalEnding(ending: TerminalEndingEvidence | null): string {
+  return ending
+    ? `结局事件证据：${ending.label} (${ending.id})`
+    : "结局事件证据：无（不从播报文本推断）";
 }
 
 const L = [
@@ -97,8 +141,14 @@ const L = [
   "",
   `场景 ${mod.scenes.length} / NPC ${mod.npcs.length} / 物品 ${mod.items.length}`,
   `连接总数 ${mod.scenes.reduce((a, s) => a + s.connections.length, 0)}`,
+  `结局 support：${supportSelection.source === "registered" ? `已精确登记 (${mod.id})` : `中性（${mod.id} 未登记，不借用其它模组结局）`}`,
   "",
-  failure === "" ? "**引擎没崩**" : `**引擎抛错**：${failure}`,
+  result.kind === "engine-crash" ? `**引擎抛错**：${crash}` : "**引擎未崩**",
+  `**运行结果：${result.kind}**`,
+  describeTerminalEnding(terminalEnding),
+  result.completed
+    ? "**completed playthrough：正常返回且收到真实结局事件**"
+    : "**not a completed playthrough**",
   `播报 ${lines.length} 行，决策 ${decisions} 次`,
   "",
   `**渲染过描述的场景 ${visited.size} / ${mod.scenes.length}** —— 这才是「人真的到过」`,
@@ -116,6 +166,6 @@ const L = [
 ];
 const path = await writeReport("ingest-e2e-run.md", L.join("\n"));
 console.log(
-  `崩=${failure !== ""} 行=${lines.length} 决策=${decisions} 到过场景=${visited.size}/${mod.scenes.length}  -> ${path}`,
+  `${result.kind} completed=${result.completed} 行=${lines.length} 决策=${decisions} 到过场景=${visited.size}/${mod.scenes.length} -> ${path}`,
 );
-if (failure !== "") process.exit(1);
+if (result.exitCode !== 0) process.exit(result.exitCode);

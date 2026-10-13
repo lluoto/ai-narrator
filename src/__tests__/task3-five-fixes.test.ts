@@ -6,12 +6,57 @@
 // bun test src/__tests__/task3-five-fixes.test.ts
 
 import { describe, it, expect } from "bun:test";
-import { GameSession } from "../api/game-session";
+import { GameSession, runOrdinaryDurableActionTransaction } from "../api/game-session";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 512, temperature: 0.7,
 };
+const durableCareerHostCapability = Object.freeze(Object.create(null)) as object;
+
+async function partyStateSession(label: string): Promise<GameSession> {
+  const session = new GameSession(
+    `t3-party-${label}-${Math.random()}`,
+    "cosmic-horror",
+    CFG,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "preferred",
+    { ordinaryDurableHostCapability: durableCareerHostCapability },
+  );
+  expect((await runOrdinaryDurableActionTransaction(
+    session,
+    durableCareerHostCapability,
+    async (act) => act("创建角色 investigator 甲"),
+  )).error).toBeUndefined();
+  expect((await runOrdinaryDurableActionTransaction(
+    session,
+    durableCareerHostCapability,
+    async (act) => act("创建队友 乙 investigator"),
+  )).error).toBeUndefined();
+  return session;
+}
+
+function restoreP2WorldState(source: GameSession, hp: number, status: string[] = []): GameSession {
+  expect(source.setPlayerHp("p2", hp)).toMatchObject({ ok: true });
+  const target = new GameSession(source.id, "cosmic-horror", CFG);
+  try {
+    restoreSignedOrdinaryWorld(target, CFG, (world) => {
+      const p2 = world.getEntity("p2");
+      if (!p2) throw new Error("fixture requires p2 world entity");
+      world.upsertEntity({ ...p2, status: [...status] });
+    }, source);
+  } catch (error) {
+    target.close();
+    throw error;
+  }
+  source.close();
+  return target;
+}
 
 async function arenaAt(sceneName: string) {
   const session: any = new GameSession(`t3-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员");
@@ -26,15 +71,11 @@ async function arenaAt(sceneName: string) {
 // ============================================================
 describe("3a：getState().party 带每人的 hp/maxHp/status/san/maxSan", () => {
   it("**正确**：两个 PC，各自的 hp/san 与 world.getEntity / PartyMember.san 一致", async () => {
-    const s: any = new GameSession(`t3a1-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    await s.act("创建队友 乙 investigator");
+    let s: any = await partyStateSession("a1");
 
-    // p2 受伤：直接改世界实体的 hp，模拟"谁受伤了"这个此前查不到的事实
-    const ent2 = s.world.getEntity("p2");
-    ent2.hp = Math.max(0, ent2.hp - 5);
-    ent2.status = ["流血"];
-    s.world.upsertEntity(ent2);
+    // P2's status is fixture state restored through the signed ordinary
+    // boundary; GameSession never publishes a world mutator for it.
+    s = restoreP2WorldState(s, Math.max(0, s.world.getEntity("p2").hp - 5), ["流血"]);
 
     const st = s.getState();
     const p1 = st.party.find((m: any) => m.pcId === "p1");
@@ -50,20 +91,17 @@ describe("3a：getState().party 带每人的 hp/maxHp/status/san/maxSan", () => 
     expect(p2.maxHp).toBe(worldP2.maxHp);
     expect(p2.status).toEqual(["流血"]);
 
-    const partyMap: Map<string, any> = s.party;
-    expect(p1.san).toBe(partyMap.get("p1").san.state.currentSAN);
-    expect(p1.maxSan).toBe(partyMap.get("p1").san.state.maxSAN);
-    expect(p2.san).toBe(partyMap.get("p2").san.state.currentSAN);
+    const p1Sanity = s.world.getPlayerSanity("p1");
+    const p2Sanity = s.world.getPlayerSanity("p2");
+    expect(p1.san).toBe(p1Sanity?.currentSAN);
+    expect(p1.maxSan).toBe(p1Sanity?.maxSAN);
+    expect(p2.san).toBe(p2Sanity?.currentSAN);
   });
 
   it("**错误行为红线**：p2 受伤后，p1 的状态不受影响——不能把伤挂错人头上", async () => {
-    const s: any = new GameSession(`t3a2-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    await s.act("创建队友 乙 investigator");
-    const ent2 = s.world.getEntity("p2");
+    let s: any = await partyStateSession("a2");
     const p1FullHp = s.world.getEntity("p1").hp;
-    ent2.hp = 1;
-    s.world.upsertEntity(ent2);
+    s = restoreP2WorldState(s, 1);
 
     const st = s.getState();
     const p1 = st.party.find((m: any) => m.pcId === "p1");
@@ -73,11 +111,9 @@ describe("3a：getState().party 带每人的 hp/maxHp/status/san/maxSan", () => 
   });
 
   it("**文本相似但合法**：player 单数字段没被这次改动动过——仍然只反映 active PC", async () => {
-    const s: any = new GameSession(`t3a3-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    await s.act("创建队友 乙 investigator");
+    const s: any = await partyStateSession("a3");
     const st = s.getState();
-    expect(st.player.name).toBe(s.characters.get("p1").name); // 仍是 p1（active）
+    expect(st.player.name).toBe(s.activeCharacter.name); // 仍是 p1（active）
   });
 });
 
@@ -95,11 +131,10 @@ describe("3b：移动成功后 lastNarrative 不再沿用上一轮", () => {
 
   it("**错误行为红线**：移动后 narrative 不能还停留在移动前的场景名上", async () => {
     const session = await arenaAt("维森酒吧");
-    // 直接钉死"移动前"的陈旧内容，不依赖上一句叙事恰好提没提场景名——
-    // 这样红线只测"移动成功是否如实设了新的 narrative"这一件事。
-    (session as any).lastNarrative = "你还在维森酒吧里，周围弥漫着烟酒味。";
+    const previous = await session.act("看看四周");
+    expect(previous.narrative).not.toContain("特里坎家");
     const res = await session.act("去特里坎家");
-    expect(res.narrative).not.toContain("维森酒吧");
+    expect(res.narrative).not.toBe(previous.narrative);
     expect(res.narrative).toContain("特里坎家");
   });
 });
@@ -140,9 +175,28 @@ describe("3c：未知职业走 { rejected }，不抛异常", () => {
   });
 
   it("**文本相似但合法**：文本命令「创建队友」走同一条路，未知职业不让整回合报错中断", async () => {
-    const s: any = new GameSession(`t3c5-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    const res = await s.act("创建队友 林娜 不存在的职业");
+    const s: any = new GameSession(
+      `t3c5-${Math.random()}`,
+      "cosmic-horror",
+      CFG,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "preferred",
+      { ordinaryDurableHostCapability: durableCareerHostCapability },
+    );
+    await runOrdinaryDurableActionTransaction(
+      s,
+      durableCareerHostCapability,
+      async (act) => act("创建角色 investigator 甲"),
+    );
+    const res = await runOrdinaryDurableActionTransaction(
+      s,
+      durableCareerHostCapability,
+      async (act) => act("创建队友 林娜 不存在的职业"),
+    );
     expect(res.error).toBeUndefined(); // act() 本身没有异常冒出来
     const sysMsgs = res.events.filter((e: any) => e.type === "system").map((e: any) => e.content);
     expect(sysMsgs.some((c: string) => c.includes("职业列表") || c.includes("未知职业"))).toBe(true);

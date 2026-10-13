@@ -6,9 +6,10 @@
 //
 // ⚠ 随机量钉死到 0：GameSession 的攻击判定、伤害骰、文案池选取全部走
 //   Math.random()，不钉住的话「读到了正确的文案」只是撞对，红不了。
-import { describe, test, expect } from "bun:test";
+import { afterEach, describe, test, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
 import { SCRATCH_TEMPLATES, CRIT_PREFIX } from "../llm/narrator-pools";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
@@ -17,23 +18,35 @@ const CFG = {
 
 type Ent = { id: string; name: string; type: string; hp: number; maxHp: number; ac: number; status: string[]; position: string; scene_id?: string };
 type S = {
-  world: { upsertEntity: (e: unknown) => void; getCurrentState: () => { scene: string; entities: Record<string, Ent> } };
+  world: { getCurrentState: () => { scene: string; entities: Record<string, Ent> } };
   act: (input: string) => Promise<{ events: Array<{ content: string }> }>;
 };
+
+const sessions: GameSession[] = [];
+afterEach(() => {
+  while (sessions.length) sessions.pop()!.close();
+});
 
 function render(t: string, attacker: string, defender: string, weapon: string): string {
   return t.replace(/\{attacker\}/g, attacker).replace(/\{defender\}/g, defender).replace(/\{weapon\}/g, weapon);
 }
 
 async function arena(enemyHp = 200) {
-  const s = new GameSession(`nw-${Math.random()}`, "cosmic-horror", CFG) as unknown as S;
-  await s.act("创建角色 investigator 甲");
-  const scene = s.world.getCurrentState().scene;
-  s.world.upsertEntity({
-    id: "m1", name: "食尸鬼", type: "monster", hp: enemyHp, maxHp: enemyHp,
-    ac: 0, status: [], position: scene, scene_id: scene,
-  } satisfies Ent);
-  return s;
+  const source = new GameSession(`nw-${Math.random()}`, "cosmic-horror", CFG, "investigator", "甲");
+  const target = new GameSession(source.id, "cosmic-horror", CFG);
+  try {
+    restoreSignedOrdinaryWorld(target, CFG, (world) => {
+      const scene = world.getCurrentState().scene;
+      world.upsertEntity({
+        id: "m1", name: "食尸鬼", type: "monster", hp: enemyHp, maxHp: enemyHp,
+        ac: 0, status: [], position: scene, scene_id: scene,
+      });
+    }, source);
+  } finally {
+    source.close();
+  }
+  sessions.push(target);
+  return target as unknown as S;
 }
 
 describe("GameSession 攻击要有分级叙述，不能只印数字", () => {
@@ -63,7 +76,12 @@ describe("GameSession 攻击要有分级叙述，不能只印数字", () => {
   test("**正确**：敌人还手命中玩家时，玩家也能读到叙述", async () => {
     const s = await arena();
     const real = Math.random;
-    Math.random = () => 0; // 双方都必中
+    // Equal critical levels now favor dodge. Make the defender's dodge a
+    // fumble so this still proves a real NPC counterhit emits narration.
+    // The first two draws are the encounter's SAN check and zero SAN loss.
+    const rolls = [0, 0, 0, 0, 0, 0, 0, 0.99, 0, 0, 0, 0.99, 0.99];
+    let rollIndex = 0;
+    Math.random = () => rolls[rollIndex++] ?? 0.99;
     let r: { events: Array<{ content: string }> };
     try { r = await s.act("攻击 食尸鬼"); } finally { Math.random = real; }
     // 玩家挨打的那条叙述以「📖 」开头、且不是玩家自己打怪的那条

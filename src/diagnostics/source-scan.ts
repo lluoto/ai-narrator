@@ -898,6 +898,139 @@ export function parseTestOutput(text: string): TestCount {
   };
 }
 
+/**
+ * Bounded diagnostics for a failed `bun test` run.
+ *
+ * Preflight owns a full capture so it can prove the terminal test summary, but
+ * replaying that capture on failure turns an actionable error into megabytes of
+ * unrelated fixture output.  These are limits on the rendered lines, not just
+ * on the search window: callers can print this array directly without
+ * accidentally bypassing the bound.
+ */
+export const BUN_FAILURE_CONTEXT_LIMITS = Object.freeze({
+  maxFailures: 3,
+  maxLines: 18,
+  maxBytes: 4 * 1024,
+});
+
+const BUN_FAILURE_NAME = /^\s*\(fail\)\s+(.+?)(?:\s+\[\d+(?:\.\d+)?(?:ms|s)\])?\s*$/;
+const ANSI_ESCAPE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+const DIAGNOSTIC_LINE = /(?:\berror\b|\bexpected\b|\breceived\b|\bassertionerror\b|\btypeerror\b|\bsyntaxerror\b|\b(?:ENOENT|EACCES|EPERM|ELIFECYCLE|SIG[A-Z]+)\b|\b(?:exited|exit code|timed out)\b|^\s*at\s+\S+)/i;
+const MAX_CONTEXT_LINES_PER_FAILURE = 5;
+const NEIGHBOURHOOD_LINES = 40;
+const MAX_FAILURE_NAME_BYTES = 384;
+const MAX_CONTEXT_BYTES_PER_FAILURE = 900;
+const MAX_CONTEXT_LINE_BYTES = 512;
+
+function utf8Length(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+/** Clip an arbitrary test line without ever exceeding a byte ceiling. */
+function clipUtf8(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (utf8Length(value) <= maxBytes) return value;
+  const suffix = maxBytes >= 3 ? "..." : "";
+  const suffixBytes = utf8Length(suffix);
+  let used = 0;
+  let clipped = "";
+  for (const char of value) {
+    const charBytes = utf8Length(char);
+    if (used + charBytes + suffixBytes > maxBytes) break;
+    clipped += char;
+    used += charBytes;
+  }
+  return clipped + suffix;
+}
+
+function failureName(line: string): string | undefined {
+  const match = BUN_FAILURE_NAME.exec(line);
+  if (!match) return undefined;
+  const name = match[1]!.replace(/\s+/g, " ").trim();
+  return name || undefined;
+}
+
+function isDiagnosticLine(line: string): boolean {
+  return DIAGNOSTIC_LINE.test(line);
+}
+
+/**
+ * Return directly printable, bounded failure names and nearby diagnostic
+ * context from a Bun test capture.  If Bun identified a failing test but did
+ * not print an error, the explicit placeholder makes that loss of context
+ * visible instead of making the failure look explained or green.
+ */
+export function boundedBunFailureDiagnostics(text: string): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(ANSI_ESCAPE, "").trimEnd());
+  const failures = lines
+    .map((line, index) => ({ index, name: failureName(line) }))
+    .filter((failure): failure is { index: number; name: string } => failure.name !== undefined)
+    .slice(0, BUN_FAILURE_CONTEXT_LIMITS.maxFailures);
+  const out: string[] = [];
+  let bytes = 0;
+  const append = (line: string): boolean => {
+    if (out.length >= BUN_FAILURE_CONTEXT_LIMITS.maxLines) return false;
+    const separatorBytes = out.length === 0 ? 0 : 1; // callers join with one newline
+    const remaining = BUN_FAILURE_CONTEXT_LIMITS.maxBytes - bytes - separatorBytes;
+    if (remaining <= 0) return false;
+    const clipped = clipUtf8(line, remaining);
+    if (!clipped) return false;
+    out.push(clipped);
+    bytes += separatorBytes + utf8Length(clipped);
+    return true;
+  };
+
+  if (failures.length === 0) {
+    const processDiagnostics = lines.filter(isDiagnosticLine).slice(0, BUN_FAILURE_CONTEXT_LIMITS.maxLines - 1);
+    if (processDiagnostics.length === 0) return out;
+    append("Bun test process failure (Bun printed no (fail) test name)");
+    for (const line of processDiagnostics) append(`  ${line.trim()}`);
+    return out;
+  }
+
+  for (let failureIndex = 0; failureIndex < failures.length; failureIndex++) {
+    const failure = failures[failureIndex]!;
+    const previous = failureIndex === 0 ? -1 : failures[failureIndex - 1]!.index;
+    const next = failureIndex + 1 < failures.length ? failures[failureIndex + 1]!.index : lines.length;
+    append(`bun test failure: ${clipUtf8(failure.name, MAX_FAILURE_NAME_BYTES)}`);
+
+    // Bun normally renders assertion details immediately before `(fail)`.  If
+    // a runner instead prints them after the marker, use that side only when
+    // the normal side has none; this avoids assigning the next failure's
+    // preamble to the current one.
+    const beforeStart = Math.max(previous + 1, failure.index - NEIGHBOURHOOD_LINES);
+    let context = lines
+      .slice(beforeStart, failure.index)
+      .filter(isDiagnosticLine);
+    if (context.length === 0) {
+      const afterEnd = Math.min(next, failure.index + 1 + NEIGHBOURHOOD_LINES);
+      context = lines.slice(failure.index + 1, afterEnd).filter(isDiagnosticLine);
+    }
+    const seen = new Set<string>();
+    const distinctContext = context.filter((line) => {
+      const normalized = line.trim();
+      if (!normalized || seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    }).slice(0, MAX_CONTEXT_LINES_PER_FAILURE);
+    if (distinctContext.length === 0) {
+      append("  (no recognized diagnostic lines near this failure)");
+    } else {
+      let contextBytes = 0;
+      for (const line of distinctContext) {
+        const remaining = MAX_CONTEXT_BYTES_PER_FAILURE - contextBytes;
+        if (remaining <= 0) break;
+        const rendered = clipUtf8(`  ${line.trim()}`, Math.min(remaining, MAX_CONTEXT_LINE_BYTES));
+        if (!append(rendered)) break;
+        contextBytes += utf8Length(rendered);
+      }
+    }
+  }
+  return out;
+}
+
 interface BaselineVerdict {
   problems: string[];
   notes: string[];

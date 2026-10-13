@@ -73,6 +73,35 @@ describe("▶ 条目", () => {
     const s = sectionize(["场景：\n正文一句。\n▶条目：条目正文"]);
     expect(s[0]?.body).toBe("正文一句。");
   });
+
+  test("明确发现列表引导后的连续短标签条目进入 items，且保留页内坐标", () => {
+    const s = sectionize([
+      "调查地点：\n搜索房间后可以发现以下物品。\n样本甲：倒在床边。",
+      "样本乙：嵌在墙上。\n样本丙：有奇怪的痕迹。\n列表结束后的叙述正文。\n旁注：这不是发现物。",
+    ]);
+
+    expect(s).toHaveLength(1);
+    expect(s[0]?.items).toEqual([
+      { name: "样本甲", text: "倒在床边。", source: { page: 1, line: 3 } },
+      { name: "样本乙", text: "嵌在墙上。", source: { page: 2, line: 1 } },
+      { name: "样本丙", text: "有奇怪的痕迹。", source: { page: 2, line: 2 } },
+    ]);
+    expect(s[0]?.body).toContain("列表结束后的叙述正文。");
+  });
+
+  test("没有发现列表引导时，NPC、技能、护甲与规则冒号字段仍是正文", () => {
+    const s = sectionize([[
+      "人物资料：",
+      "力量：10",
+      "技能：侦查 60%",
+      "护甲：2",
+      "规则说明：",
+      "伤害：1d6",
+      "染血钥匙：挂在门后。",
+    ].join("\n")]);
+
+    expect(s.flatMap((section) => section.items)).toEqual([]);
+  });
 });
 
 describe("既像条目又像标题的行", () => {

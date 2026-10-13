@@ -3,10 +3,11 @@
 // LLM 不可用时：退化为 regex 模式匹配
 
 import type { ActionIntent } from "../types";
-import type { LLMClient } from "./client";
+import { LLMClientError, type LLMClient } from "./client";
 import { log } from "../log";
 import { llmEnabled } from "./enabled";
 import { extractJson } from "./json";
+import { parseOrdinaryLocalCommand } from "./ordinary-local-command";
 
 // ============================================================
 // 硬编码 fallback（regex 模式匹配）
@@ -59,7 +60,10 @@ const INTENT_PATTERNS: Array<{ verb: RegExp; intent: Partial<ActionIntent>; requ
   { verb: /^去\s*\S+/, intent: { action: "move" } }, // "去谷仓" 等简短指令
   { verb: /(?:使用|释放|施放|施展).*(?:法术|魔法|咒语)/, intent: { action: "cast" } },
   { verb: /(?:使用|用|装备).*(?:道具|物品|药水|绷带|急救包|武器)/, intent: { action: "use_item" } },
-  { verb: /(?:捡起|捡|拾取|拿起|拿走)/, intent: { action: "pickup" } },
+  // Pickup mutates package-owned physical placement.  The offline parser may
+  // supply an item only for this complete command form; GameSession never
+  // falls back to `target` or scans arbitrary prose for a loot name.
+  { verb: /^(?:捡起|捡|拾取|拿起|拿走)\s*(\S(?:.*\S)?)\s*$/, intent: { action: "pickup" } },
   // 施法动词 + 具名法术。必须夹在这两条之间，位置是被两侧同时约束死的：
   //   - 要排在下方 first_aid / rest 之前，否则「施放治疗术」被 rest 的「治疗」
   //     拦成休息、「施展治疗伤势」被 first_aid 拦成急救——玩家想施法，游戏让他休息；
@@ -67,6 +71,9 @@ const INTENT_PATTERNS: Array<{ verb: RegExp; intent: Partial<ActionIntent>; requ
   //     「使用 + 治疗」吃掉，喝药变成施法。
   { verb: /(?:施放|施展|释放|使用|吟唱|念咒|施法).*(?:魔法飞弹|燃烧之手|霜冻射线|火球术|闪电束|灼热射线|魔法弹)/, intent: { action: "cast" } },
   { verb: /(?:施放|施展|释放|使用|吟唱|念咒|施法).*(?:治疗伤势|治愈|治疗|魔法飞弹|火球术)/, intent: { action: "cast" } },
+  // A named ritual need not be in the static D&D spell vocabulary. The ruleset
+  // authority validates the exact name before any cosmic-horror cast succeeds.
+  { verb: /(?:施放|施展|释放|施法)\s*[^\s]{2,12}$/, intent: { action: "cast" } },
   // ⚠ 「急救」后面原先**必须**跟 伤口|伤势|出血|伤，裸词落到 unknown ——
   //   而 `handleFirstAid` 就在派发表里，打「急救」够不着它。改成后缀可选。
   { verb: /(?:急救|包扎|止血)|(?:医疗|治疗).*(?:伤口|伤势|出血|伤)/, intent: { action: "first_aid" } },
@@ -160,8 +167,9 @@ const INTENT_PATTERNS: Array<{ verb: RegExp; intent: Partial<ActionIntent>; requ
   { verb: /(?:装填|上弹|装弹|重新.*装弹|换.*弹匣|装.*子弹)/, intent: { action: "reload" } },
   // CoC 推动检定
   { verb: /(?:推动|push|再试一次|再来|重试|重新.*投|重新.*检定)/, intent: { action: "push" } },
-  // CoC 神话法术
-  { verb: /(?:念咒|吟唱|召唤|呼唤|驱逐|放逐).*(?:米戈|克苏鲁|神话|咒语)/, intent: { action: "occult_cast" } },
+  // CoC 神话法术。召唤/呼唤/驱逐/放逐可属于法术 canonical 名称本身；
+  // 念咒/吟唱则是外层命令前缀，目标提取时可以去掉。
+  { verb: /(?:念咒|吟唱)\s*\S{1,12}$|(?:召唤|呼唤|驱逐|放逐)\S{1,12}$/, intent: { action: "occult_cast" } },
   // CoC 追逐
   //
   // ⚠ 收紧过（修A·任务2）：原来是 /(?:追逐|逃跑|跑|追|逃)/，裸「追」「跑」
@@ -227,10 +235,12 @@ function extractTarget(input: string, action: string): string | undefined {
     const match = input.match(/(?:施放|施展|释放|使用|吟唱|念咒|施法)\s*(.{2,12})$/);
     if (match && match[1].length >= 1) return match[1].trim();
   }
-  // 神话法术类：取动词后的法术名
+  // 神话法术类：念咒/吟唱是命令前缀；其余动词可以是 canonical 名称的一部分。
   if (action === "occult_cast") {
-    const match = input.match(/(?:念咒|吟唱|召唤|呼唤|驱逐|放逐)\s*(.{2,12})$/);
-    if (match && match[1].length >= 1) return match[1].trim();
+    const incantation = input.match(/(?:念咒|吟唱)\s*(.{1,12})$/);
+    if (incantation && incantation[1].length >= 1) return incantation[1].trim();
+    const canonical = input.match(/(?:召唤|呼唤|驱逐|放逐)\s*(.{1,12})$/);
+    if (canonical && canonical[0].length >= 1) return canonical[0].trim();
   }
   return undefined;
 }
@@ -366,19 +376,180 @@ CoC 额外字段:
 - weaponName: CoC 武器名（中文，如".38左轮""12号霰弹枪""格斗(肉搏)"）
 - calledShot: 瞄准部位（字符串，如"头部""腿部""腹部""胸部""右臂""左腿""武器""眼睛"）
 
+物品动作额外字段:
+- item: 购买、出售、使用、拾取、装备或卸下的物品名
+
 只输出 JSON，不要任何额外文字。格式:
 {"action":"attack","target":"哥布林","weapon":"shortsword","method":"melee"}`;
 
+// The model only classifies a normal-session ActionIntent.  It never receives
+// a compiled catalog, an action command, or an execution capability.  Keep the
+// accepted action labels in sync with the ordinary regex parser rather than
+// accepting arbitrary strings which can reach GameSession.handleIntent().
+const NORMAL_INTENT_ACTIONS = new Set([
+  "allocate_skills", "attack", "buy", "cast", "chase", "create_character",
+  "equip", "first_aid", "flee", "generate_story", "help", "insanity_guidance",
+  "inventory", "legacy", "list_occupations", "load_module", "look", "move",
+  "occult_cast", "pickup", "push", "read", "reload", "rest", "san_check",
+  "saving_throw", "sell", "shop", "skill_advancement", "skill_check", "spell_list",
+  "status", "talk", "unequip", "unknown", "use_item", "view_module",
+] as const);
+
+const NORMAL_INTENT_REPLY_KEYS: ReadonlySet<string> = new Set([
+  "action", "target", "weapon", "method", "skill", "ability", "dc", "sanCost",
+  "reason", "spell", "luckSpend", "weaponName", "calledShot", "item",
+] as const);
+
+const NORMAL_INTENT_METHODS = new Set([
+  "melee", "ranged", "stealth", "aimed", "burst", "suppress",
+] as const);
+
+const NORMAL_INTENT_SKILLS = new Set([
+  "stealth", "perception", "investigation", "persuasion", "medicine", "history", "occult",
+  "library_use", "listen", "intimidate", "charm", "fast_talk", "psychoanalysis",
+] as const);
+
+const NORMAL_INTENT_ABILITIES = new Set([
+  "strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma",
+] as const);
+
+// These are the values already emitted by WEAPON_PATTERNS.  weaponName remains
+// a bounded display string because CoC weapon names are module/game data, not a
+// second executable action vocabulary.
+const NORMAL_INTENT_WEAPONS = new Set([
+  "shortsword", "longsword", "dagger", "longbow", "quarterstaff", ".38左轮", "12号霰弹枪", "格斗(肉搏)",
+] as const);
+
+const NORMAL_INTENT_CALLED_SHOTS = new Set([
+  "头部", "胸部", "腹部", "左腿", "右腿", "左臂", "右臂", "武器", "眼睛",
+] as const);
+
+const MAX_NORMAL_INTENT_TEXT_CHARS = 256;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBoundedIntentText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_NORMAL_INTENT_TEXT_CHARS;
+}
+
+function isKnownString(value: unknown, allowed: ReadonlySet<string>): value is string {
+  return typeof value === "string" && allowed.has(value);
+}
+
+function isSafeIntentInteger(value: unknown, minimum: number, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+}
+
+function isSafeSanCost(value: unknown): value is string {
+  if (!isBoundedIntentText(value)) return false;
+  const costs = value.split("/");
+  if (costs.length !== 2) return false;
+  return costs.every((cost) => {
+    const match = /^(\d+)(?:d(\d+))?$/.exec(cost);
+    if (!match) return false;
+    const count = Number(match[1]);
+    const sides = match[2] === undefined ? undefined : Number(match[2]);
+    return Number.isSafeInteger(count) && count >= 0 && count <= 100
+      && (sides === undefined || Number.isSafeInteger(sides) && sides >= 1 && sides <= 100);
+  });
+}
+
+/**
+ * Project one untrusted model object into the normal ActionIntent contract.
+ *
+ * This intentionally does not reuse compiled-action-intent's parser: compiled
+ * replies select an allowlisted mechanism and fail closed, while ordinary
+ * sessions retain their established regex degradation behavior.  Both paths
+ * nevertheless reject unknown keys and values before anything reaches a
+ * handler.
+ */
+function parseNormalIntentReply(value: unknown): ActionIntent | null {
+  if (!isRecord(value)) return null;
+  const keys = Object.keys(value);
+  if (!keys.includes("action") || !keys.every((key) => NORMAL_INTENT_REPLY_KEYS.has(key))) return null;
+  if (!isKnownString(value.action, NORMAL_INTENT_ACTIONS)) return null;
+  if ("target" in value && !isBoundedIntentText(value.target)) return null;
+  if ("weapon" in value && !isKnownString(value.weapon, NORMAL_INTENT_WEAPONS)) return null;
+  if ("method" in value && !isKnownString(value.method, NORMAL_INTENT_METHODS)) return null;
+  if ("skill" in value && !isKnownString(value.skill, NORMAL_INTENT_SKILLS)) return null;
+  if ("ability" in value && !isKnownString(value.ability, NORMAL_INTENT_ABILITIES)) return null;
+  if ("dc" in value && !isSafeIntentInteger(value.dc, 0, 100)) return null;
+  if ("sanCost" in value && !isSafeSanCost(value.sanCost)) return null;
+  if ("reason" in value && !isBoundedIntentText(value.reason)) return null;
+  if ("spell" in value && !isBoundedIntentText(value.spell)) return null;
+  if ("luckSpend" in value && !isSafeIntentInteger(value.luckSpend, 0, 100)) return null;
+  if ("weaponName" in value && !isBoundedIntentText(value.weaponName)) return null;
+  if ("calledShot" in value && !isKnownString(value.calledShot, NORMAL_INTENT_CALLED_SHOTS)) return null;
+  if ("item" in value && !isBoundedIntentText(value.item)) return null;
+
+  return {
+    action: value.action,
+    ...("target" in value ? { target: value.target as string } : {}),
+    ...("weapon" in value ? { weapon: value.weapon as string } : {}),
+    ...("method" in value ? { method: value.method as string } : {}),
+    ...("skill" in value ? { skill: value.skill as string } : {}),
+    ...("ability" in value ? { ability: value.ability as string } : {}),
+    ...("dc" in value ? { dc: value.dc as number } : {}),
+    ...("sanCost" in value ? { sanCost: value.sanCost as string } : {}),
+    ...("reason" in value ? { reason: value.reason as string } : {}),
+    ...("spell" in value ? { spell: value.spell as string } : {}),
+    ...("luckSpend" in value ? { luckSpend: value.luckSpend as number } : {}),
+    ...("weaponName" in value ? { weaponName: value.weaponName as string } : {}),
+    ...("calledShot" in value ? { calledShot: value.calledShot as string } : {}),
+    ...("item" in value ? { item: value.item as string } : {}),
+  };
+}
+
+/**
+ * Shared strict projection for persisted ordinary-session intents.  Snapshot
+ * restore must use the same executable vocabulary as model replies, not accept
+ * ActionIntent's intentionally broad TypeScript shape as an untrusted record.
+ */
+export function validateNormalSessionActionIntent(value: unknown): ActionIntent {
+  const intent = parseNormalIntentReply(value);
+  if (!intent) throw new Error("invalid normal-session ActionIntent");
+  return structuredClone(intent);
+}
+
+export const NORMAL_SESSION_INTENT_TIMEOUT_MS = 15_000;
+export const NORMAL_SESSION_INTENT_MAX_TOKENS = 128;
+
+export type NormalSessionIntentPolicy = "preferred" | "required" | "development_fallback";
+/** The narrow capability GameSession needs from its host-selected intent client. */
+export type NormalSessionIntentClient = Pick<LLMClient, "chat">;
+export type IntentProvenance = "model" | "regex_offline" | "regex_invalid" | "regex_error";
+
+export type NormalIntentResolution =
+  | { status: "resolved"; intent: ActionIntent; provenance: IntentProvenance; latencyMs: number }
+  | { status: "unavailable"; errorCode: string; latencyMs: number }
+  | { status: "invalid"; errorCode: "intent_reply_invalid"; latencyMs: number };
+
+class IntentReplyInvalidError extends Error {
+  constructor() {
+    super("LLM returned an invalid intent reply");
+    this.name = "IntentReplyInvalidError";
+  }
+}
+
 async function parseIntentLLM(
   input: string,
-  llm: LLMClient
+  llm: NormalSessionIntentClient
 ): Promise<ActionIntent> {
   const raw = await llm.chat(
     [
       { role: "system", content: INTENT_SYSTEM_PROMPT },
       { role: "user", content: input },
     ],
-    { temperature: 0.1, maxTokens: 200, jsonMode: true }
+    {
+      temperature: 0.1,
+      maxTokens: NORMAL_SESSION_INTENT_MAX_TOKENS,
+      timeout: NORMAL_SESSION_INTENT_TIMEOUT_MS,
+      maxAttempts: 1,
+      jsonMode: true,
+      workload: "intent",
+    }
   );
 
   // ⚠ 曾经这里是裸 `JSON.parse(raw.trim())`：LLM 把合法 JSON 裹进 ```json
@@ -388,26 +559,9 @@ async function parseIntentLLM(
   // 真实事故的直接根因。改用 extractJson：能剥围栏、也兼容不裹围栏的
   // 裸 JSON，两种形态都不必再退化到 regex。
   const parsed = extractJson(raw);
-  if (parsed && typeof parsed === "object") {
-    const p = parsed as Record<string, unknown>;
-    return {
-      action: (typeof p.action === "string" && p.action) || "unknown",
-      target: p.target as string | undefined,
-      weapon: p.weapon as string | undefined,
-      method: p.method as string | undefined,
-      skill: p.skill as string | undefined,
-      ability: p.ability as string | undefined,
-      dc: p.dc as number | undefined,
-      sanCost: p.sanCost as string | undefined,
-      reason: p.reason as string | undefined,
-    };
-  }
-  // 真正抠不出任何 JSON 对象（模型答的不是 JSON、或答案里压根没有 { }）
-  // 才退化到 regex。原先这里静默——「LLM 答错了」和「LLM 一直在失败」在
-  // 外部完全无法区分，判错率无从归因。带上原文前 80 字，别只报一句
-  // 「失败了」（那等于没报）。
-  log.warn("intent", `LLM 返回的内容里抠不出 JSON 对象，退化到 regex: ${raw.slice(0, 80)}`);
-  return parseIntentRegex(input);
+  const intent = parseNormalIntentReply(parsed);
+  if (intent) return intent;
+  throw new IntentReplyInvalidError();
 }
 
 // ============================================================
@@ -421,10 +575,8 @@ export function setIntentLLM(client: LLMClient | null) {
 }
 
 /**
- * 是否已经设过意图解析用的 LLM。
- *
- * 给「只在还没设过时才设」用 —— `_llmClient` 是模块级单例，多个会话共享一份。
- * 每建一个会话就覆盖一次，会让并发会话互相踩，也会把 CLI 显式设的那份顶掉。
+ * Whether the CLI/legacy global parseIntent() client has been configured.
+ * GameSession never reads or writes this singleton: its client is session-bound.
  */
 export function intentLLMConfigured(): boolean {
   return _llmClient !== null;
@@ -443,21 +595,21 @@ export function intentLLMConfigured(): boolean {
  * 「静默 = 健康」的假设在这仓库已经错过一次。这次同样不能靠"没打印"
  * 反推"一切正常"，得有一条明确的、能唯一反推走哪条路的声明。
  *
- * 调用时机：GameSession 构造函数里，在决定"要不要 setIntentLLM"那段代码
- * 之后调一次——不是每回合调，一局一次。
+ * GameSession calls this once with its own client after selecting its local
+ * route. Legacy callers may omit the argument to declare the CLI global route.
  */
-export function declareIntentPath(): void {
-  if (intentLLMConfigured()) {
+export function declareIntentPath(client: NormalSessionIntentClient | null = _llmClient): void {
+  if (client) {
     log.info("intent", "本局意图解析走 LLM（LLMClient 接缝已配置）");
     return;
   }
-  // `_llmClient` 为 null 有两种截然不同的原因，日志得能分清是哪种：
+  // A null selected client has two distinct causes; the log must distinguish them:
   //   · llmEnabled() 为假——没 key，或被 LLM_DISABLED/LLM_MODE 显式关掉
-  //   · llmEnabled() 为真但接缝仍未配置——这局的 this.llm 不是真正的
-  //     LLMClient（MockLLMClient/占位 key），且此前也没有别的会话/CLI 设过
+  //   · llmEnabled() 为真但接缝仍未配置——本局候选的 client 不是
+  //     LLMClient（MockLLMClient/占位 key）
   const reason = !llmEnabled()
     ? "llmEnabled() 为 false（无 key，或被 LLM_DISABLED/LLM_MODE 关掉）"
-    : "LLMClient 接缝未配置（本局用的是 MockLLMClient/占位 key，此前也没有别处设过）";
+    : "LLMClient 接缝未配置（本局用的是 MockLLMClient/占位 key）";
   log.warn("intent", `本局意图解析全程走 regex，不会调用 LLM：${reason}`);
 }
 
@@ -468,20 +620,66 @@ export function declareIntentPath(): void {
  * handleSkillCheck 抢先 return，该模组因此永远加载不了。前缀已经给出确定答案，
  * 再问一遍模型只会引入这类误判 —— 名字里含「攻击」「移动」的模组同样会中招。
  */
-const LOAD_MODULE_PREFIX = /^\s*(?:加载|装载|载入|导入|启用|使用)\s*(?:模组|剧本|模块)/;
+export function isExplicitLoadModuleIntent(input: string): boolean {
+  return parseOrdinaryLocalCommand(input)?.kind === "load_module";
+}
 
-export async function parseIntent(input: string): Promise<ActionIntent> {
-  if (LOAD_MODULE_PREFIX.test(input)) return { action: "load_module" };
-  if (_llmClient) {
-    try {
-      return await parseIntentLLM(input, _llmClient);
-    } catch (err) {
-      // LLM 调用本身失败（网络/超时/非 2xx）→ 退化到 regex。同上，原先静默，
-      // 把原因带上，别让「答错」和「一直在失败」在外部分不出来。
-      log.warn("intent", `LLM 调用失败，退化到 regex: ${err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80)}`);
-    }
+/**
+ * Resolve a normal ActionIntent without executing it. Required callers receive
+ * a typed refusal instead of silently changing interpretation to regex.
+ */
+export async function resolveNormalSessionIntent(
+  input: string,
+  client: NormalSessionIntentClient | null,
+  policy: NormalSessionIntentPolicy,
+): Promise<NormalIntentResolution> {
+  const startedAt = Date.now();
+  const elapsed = () => Date.now() - startedAt;
+  // API-required sessions can only bypass classification through the
+  // GameSession-owned catalog validation performed before this resolver.
+  // Legacy/preferred callers retain the historical explicit module command.
+  if (policy !== "required" && isExplicitLoadModuleIntent(input)) {
+    return { status: "resolved", intent: { action: "load_module" }, provenance: "regex_offline", latencyMs: elapsed() };
   }
-  return parseIntentRegex(input);
+  if (!client) {
+    if (policy === "required") return { status: "unavailable", errorCode: "intent_client_unavailable", latencyMs: elapsed() };
+    return { status: "resolved", intent: parseIntentRegex(input), provenance: "regex_offline", latencyMs: elapsed() };
+  }
+  try {
+    return { status: "resolved", intent: await parseIntentLLM(input, client), provenance: "model", latencyMs: elapsed() };
+  } catch (error) {
+    if (error instanceof IntentReplyInvalidError) {
+      if (policy === "required") return { status: "invalid", errorCode: "intent_reply_invalid", latencyMs: elapsed() };
+      log.warn("intent", "LLM 意图 JSON 无效，退化到 regex [code=intent_reply_invalid]");
+      return { status: "resolved", intent: parseIntentRegex(input), provenance: "regex_invalid", latencyMs: elapsed() };
+    }
+    if (error instanceof LLMClientError && error.code === "invalid_response") {
+      if (policy === "required") return { status: "invalid", errorCode: "intent_reply_invalid", latencyMs: elapsed() };
+      log.warn("intent", "LLM returned an empty or malformed completion; falling back to regex");
+      return { status: "resolved", intent: parseIntentRegex(input), provenance: "regex_invalid", latencyMs: elapsed() };
+    }
+    const errorCode = error instanceof LLMClientError
+      ? `intent_${error.code}`
+      : "intent_request_failed";
+    if (policy === "required") return { status: "unavailable", errorCode, latencyMs: elapsed() };
+    log.warn("intent", `LLM intent request failed; falling back to regex [code=${errorCode}]`);
+    return { status: "resolved", intent: parseIntentRegex(input), provenance: "regex_error", latencyMs: elapsed() };
+  }
+}
+
+/**
+ * Parse with an explicitly supplied client. GameSession uses this to keep a
+ * session's request on that session's LLM configuration instead of the CLI
+ * compatibility singleton below.
+ */
+export async function parseIntentWithLLM(input: string, client: NormalSessionIntentClient | null): Promise<ActionIntent> {
+  const resolution = await resolveNormalSessionIntent(input, client, "preferred");
+  return resolution.status === "resolved" ? resolution.intent : parseIntentRegex(input);
+}
+
+/** CLI and legacy callers keep their module-level configured client. */
+export async function parseIntent(input: string): Promise<ActionIntent> {
+  return parseIntentWithLLM(input, _llmClient);
 }
 
 // 保留旧接口兼容

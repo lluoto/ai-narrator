@@ -622,6 +622,7 @@ export class InvestigationEngine {
     playerSkills: Record<string, number>,
     playerName: string,
     overrideSkill?: { id: string; value: number; pushed?: boolean; forceSuccess?: boolean },
+    percentileTargetModifier?: (baseTarget: number) => number,
   ): {
     success: boolean;
     // 这里原本写的是 string。值本来就来自 CoCEngine 的成功层级，放宽成 string
@@ -665,7 +666,12 @@ export class InvestigationEngine {
     };
 
     const skillName = overrideSkill?.id ?? primary.skill;
-    const skillValue = overrideSkill?.value ?? (playerSkills[skillName] ?? 20);
+    const baseSkillValue = overrideSkill?.value ?? (playerSkills[skillName] ?? 20);
+    // A deterministic grant remains a no-roll grant. Idea and ordinary clue
+    // checks remain active percentile checks and use the caller's modifier.
+    const skillValue = overrideSkill?.forceSuccess
+      ? baseSkillValue
+      : (percentileTargetModifier ? percentileTargetModifier(baseSkillValue) : baseSkillValue);
     const profile = this.effectiveProfile;
 
     // CoC skillCheck —— 加入难度导致的惩罚骰。不传 luckSpend（第 5 参，

@@ -199,10 +199,12 @@ describe("manifest scope 查询", () => {
 });
 
 describe("运行时隔离", () => {
-  it("现有 GameSession/world loader 不 import dataset adapter，本轮未切换注入", () => {
+  it("普通 loader 不直连 dataset，compiled GameSession 只经受限 scope adapter 注入", () => {
     for (const file of ["src/api/game-session.ts", "src/world/world-model-loader.ts", "src/index.ts"]) {
       const imports = scanImports(readFileSync(file, "utf8"));
       expect(imports.some((entry) => importPointsTo(entry.path, "cthulhu-dataset"))).toBe(false);
     }
+    const sessionImports = scanImports(readFileSync("src/api/game-session.ts", "utf8"));
+    expect(sessionImports.some((entry) => importPointsTo(entry.path, "compiled-world-model-scope"))).toBe(true);
   });
 });

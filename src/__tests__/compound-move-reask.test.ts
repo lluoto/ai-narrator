@@ -139,8 +139,8 @@ describe("回归：两份实跑报告里判对的输入，判定结果逐条不�
 
 describe("两道确认门（compound-move 认人 Map / leave 单 boolean）不会互相打架", () => {
   it("复合回问 pending 期间的回复只会被当成回问的答复，不会被误判成离开确认", async () => {
-    await session.act("检查加比的拖车房里的床底和柜子，看有没有藏东西。");
-    expect((session as any).pendingCompoundMove.has("p1")).toBe(true);
+    const prompted = await session.act("检查加比的拖车房里的床底和柜子，看有没有藏东西。");
+    expect(systemReplies(prompted)).toContain("你是要先去");
     // 回复一句"确定"——act() 顶部先检查 myPendingMove（当前 PC 自己的
     // compound-move），命中就直接消费掉，不会走到下面的 leave 分支
     // （isConfirmReply("确定") 本来也为 true，如果两道门顺序反了就会被
@@ -150,8 +150,8 @@ describe("两道确认门（compound-move 认人 Map / leave 单 boolean）不�
   });
 
   it("离开确认 pending 期间不会触发复合回问检测", async () => {
-    await session.act("我们决定放弃调查，收工回家。");
-    expect((session as any).pendingLeaveConfirm).toBe(true);
+    const requested = await session.act("我们决定放弃调查，收工回家。");
+    expect(systemReplies(requested)).toContain("确定要离开");
     // 这一步即使回复内容里提到别的场景名，也应该只走确认/取消分支，
     // 不会被复合回问检测拦截（pendingLeaveConfirm 为真时 act() 顶部就
     // 短路返回，压根不会跑到复合句检测那一段代码）。

@@ -7,7 +7,7 @@
 // 走 `runIngestFromPages` 而不是 `runIngest`：后者第一件事是解码 PDF，
 // 而 PDF 在仓库之外。这道缝就是为了让编排能脱离那份文件被验。
 import { describe, expect, test } from "bun:test";
-import { runIngestFromPages } from "../ingest/pipeline";
+import { classifyAndBuild, prepareSections, requiredIngestFailure, runIngestFromPages } from "../ingest/pipeline";
 
 /** 按调用顺序回话的假客户端，顺带记下每次的 prompt */
 function scriptedClient(replies: string[]) {
@@ -118,6 +118,109 @@ describe("编排", () => {
     const r = await runIngestFromPages(PAGES, client);
     expect(r.scenes).toEqual([]);
     expect(r.items).toEqual([]);
+  });
+
+  test("块分类请求失败时，非空输入不能再被入口当作可写出的空模组", async () => {
+    const client = {
+      chat: async () => {
+        throw new Error("offline");
+      },
+    } as never;
+
+    const r = await runIngestFromPages(PAGES, client);
+    expect(requiredIngestFailure(r)).toEqual({
+      stage: "section-classification",
+      kind: "no-classifications",
+    });
+  });
+
+  test("无可用场景的块分类不足以继续产出模组", async () => {
+    const { client } = scriptedClient(['{"农场外围":"rule"}']);
+    const r = await runIngestFromPages(PAGES, client);
+
+    expect(requiredIngestFailure(r)).toEqual({
+      stage: "section-classification",
+      kind: "no-scenes",
+    });
+  });
+
+  test("没有可分类标题时，零个 usable scene 也必须阻止发布", async () => {
+    const { client } = scriptedClient([]);
+    const r = await runIngestFromPages(["这是一段没有标题的普通正文。"], client);
+
+    expect(r.classifyInputs).toEqual([]);
+    expect(r.scenes).toEqual([]);
+    expect(requiredIngestFailure(r)).toEqual({
+      stage: "section-classification",
+      kind: "no-scenes",
+    });
+  });
+
+  test("部分块分类且没有条目的文档仍是可继续的合法输入", async () => {
+    const pages = ["农场外围：\n这里是一处可供调查的地点。\n附录：\n仅供主持人参考。\n"];
+    const { client } = scriptedClient(['{"农场外围":"scene"}']);
+    const r = await runIngestFromPages(pages, client);
+
+    expect(r.itemInputs).toEqual([]);
+    expect(r.kinds.size).toBe(1);
+    expect(requiredIngestFailure(r)).toBeUndefined();
+  });
+
+  test("条目分类只要有可用部分就不误报为失败", async () => {
+    const pages = [
+      "农场外围：\n这里是一处可供调查的地点。\n▶线索甲：第一条信息。\n▶线索乙：第二条信息。\n",
+    ];
+    const { client } = scriptedClient([
+      '{"农场外围":"scene"}',
+      '{"p1:L3":"clue"}',
+    ]);
+    const r = await runIngestFromPages(pages, client);
+
+    expect(r.itemInputs).toHaveLength(2);
+    expect(r.itemKindsFirstPass).toEqual(new Map([["p1:L3", "clue"]]));
+    expect(requiredIngestFailure(r)).toBeUndefined();
+  });
+
+  test("有条目时，条目分类请求失败不能继续写出少了条目的模组", async () => {
+    let calls = 0;
+    const client = {
+      chat: async () => {
+        calls++;
+        if (calls === 1) return '{"农场外围":"scene"}';
+        throw new Error("offline");
+      },
+    } as never;
+    const r = await runIngestFromPages(PAGES, client);
+
+    expect(r.itemInputs.length).toBeGreaterThan(0);
+    expect(r.itemKindsFirstPass).toEqual(new Map());
+    expect(requiredIngestFailure(r)).toEqual({
+      stage: "item-classification",
+      kind: "no-classifications",
+    });
+  });
+
+  test("发现列表条目会经 classifyAndBuild 进入 item/clue 与溯源产物", async () => {
+    const sections = prepareSections([
+      "调查地点：\n搜索房间后可以发现以下物品。\n样本甲：倒在床边。",
+      "样本乙：嵌在墙上。\n样本丙：有奇怪的痕迹。",
+    ]);
+    const { client } = scriptedClient([
+      '{"调查地点":"scene"}',
+      '{"p1:L3":"item","p2:L1":"clue","p2:L2":"clue"}',
+      '{"p1:L3":"thing"}',
+    ]);
+
+    const r = await classifyAndBuild(sections, client);
+
+    expect(r.itemInputs).toEqual([
+      expect.objectContaining({ key: "p1:L3", name: "样本甲", text: "倒在床边。" }),
+      expect.objectContaining({ key: "p2:L1", name: "样本乙", text: "嵌在墙上。" }),
+      expect.objectContaining({ key: "p2:L2", name: "样本丙", text: "有奇怪的痕迹。" }),
+    ]);
+    expect(r.items.map((item) => item.name)).toEqual(["样本甲"]);
+    expect(r.scenes[0]?.clues.map((clue) => clue.name)).toEqual(["样本乙", "样本丙"]);
+    expect(r.clueProvenance.map((entry) => entry.sourceRef)).toEqual(["p2:L1", "p2:L2"]);
   });
 });
 

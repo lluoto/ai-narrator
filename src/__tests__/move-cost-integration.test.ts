@@ -13,7 +13,7 @@ function makeSession(): GameSession {
   process.env.OPENAI_API_KEY = "";
   return new GameSession("move-cost-test", "cosmic-horror", {
     apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 1024, temperature: 0.7,
-  }, undefined, "调查员");
+  }, "investigator", "调查员");
 }
 
 let session: GameSession;
@@ -27,7 +27,7 @@ beforeEach(async () => {
   //   特里坎家 → 维修间     = 8 跳
 });
 
-const gameTimeOf = (s: GameSession): GameTime => (s as any).gameTime;
+const gameTimeOf = (s: GameSession): GameTime => ({ ...s.exportOrdinarySessionSnapshot().state.gameTime } as GameTime);
 
 describe("相邻移动（1 跳）：时间推进与改动前逐字一致", () => {
   it("act() 本来就会推进 1 tick，1 跳移动不应该额外再加", async () => {

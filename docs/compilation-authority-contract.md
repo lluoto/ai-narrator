@@ -1,8 +1,12 @@
 # Compilation Authority Contract
 
-`src/compiler/` defines pure compiler inputs and candidate resolution. It does
-not import datasets, source-bound artifacts, world-model runtime code, or
-`ModuleData` loaders.
+The pure authority layer in `src/compiler/`—`source-authority`,
+`compilation-manifest`, and `candidate-resolution`—defines pure compiler inputs
+and candidate resolution. That layer does not import datasets, source-bound
+artifacts, world-model runtime code, or `ModuleData` loaders. The catalog is a
+separate bridge in the same directory: it may validate and persist a
+server-owned, artifact-bound runtime world-reference binding, but it does not
+turn that binding or its dataset candidates into compiler facts.
 
 ## Evidence
 
@@ -47,6 +51,14 @@ Name, faction, and attributes also come from the module snapshot. WorldEntity
 does not persist skills, abilities, or tactics, so this registration path does
 not merge generic values into them.
 
-No source-bound artifact consumer exists yet. A later compiler wiring task must
-load artifact candidates/evidence lazily, construct a CompilationManifest, and
-pass only resolved outputs to an explicit compilation boundary.
+There is a catalog-owned source-bound *runtime-reference* consumer: an exact
+artifact-bound world binding can load its scoped dataset and build an ephemeral
+prompt reference with provenance. It cannot mutate state or supply module plot
+facts, mechanics, scenes, clues, NPCs, items, or outcomes.
+
+No production compiler-authority consumer exists yet. In particular, no
+production path loads world candidates/evidence into `ClaimCandidate`,
+constructs a `CompilationManifest`, calls `resolveCandidates()`, and passes only
+those resolved outputs to an explicit compilation boundary. A later compiler
+wiring task must add that distinct path without treating a catalog bundle or
+runtime-reference binding as its substitute.

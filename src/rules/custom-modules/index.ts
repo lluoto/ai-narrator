@@ -14,12 +14,12 @@
  */
 
 import type { MythosModule } from "../mythos-module";
-import type { ModuleData } from "../../module/types";
+import type { RuntimeModuleData } from "../../module/types";
 import { BARN_OF_PREMIER } from "../../module/barn-of-premier";
 
 // ── 模组注册表 ──
 // 所有已提取的社区模组在此注册
-export type CustomModuleData = MythosModule | ModuleData;
+export type CustomModuleData = MythosModule | RuntimeModuleData;
 export interface CustomModuleEntry {
   name: string;
   module: CustomModuleData;

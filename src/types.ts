@@ -122,7 +122,7 @@ export interface Effect {
   id: string;
   source: string;
   target: string;
-  type: 'advantage' | 'disadvantage' | 'condition' | 'buff';
+  type: 'advantage' | 'disadvantage' | 'condition' | 'buff' | 'debuff';
   description: string;
   duration: number;        // 剩余回合
 }

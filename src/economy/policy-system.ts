@@ -7,18 +7,18 @@ import {
   Policy, PolicyCategory, PolicyEffect, Faction,
   EconomyEvent, EconomyEventType
 } from "./types";
-
-let eventCounter = 0;
+import type { PolicySystemSnapshot } from "./politico-economy-snapshot";
 
 export class PolicySystem {
   policies: Map<string, Policy> = new Map();
   events: EconomyEvent[] = [];
   round: number = 0;
+  private eventCounter: number = 0;
 
   constructor() {}
 
   private generateId(prefix: string): string {
-    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${++eventCounter}`;
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${++this.eventCounter}`;
   }
 
   private logEvent(
@@ -136,6 +136,24 @@ export class PolicySystem {
 
   getAllPolicies(): Policy[] {
     return Array.from(this.policies.values());
+  }
+
+  /** Internal persistence primitive. Untrusted snapshots are validated by the engine. */
+  exportForSnapshot(): PolicySystemSnapshot {
+    return {
+      policies: Array.from(this.policies.values()),
+      events: this.events,
+      round: this.round,
+      eventCounter: this.eventCounter,
+    };
+  }
+
+  /** Internal persistence primitive. Call only with validatePoliticoEconomySnapshot output. */
+  replaceFromSnapshot(snapshot: PolicySystemSnapshot): void {
+    this.policies = new Map(snapshot.policies.map(policy => [policy.id, policy]));
+    this.events = snapshot.events;
+    this.round = snapshot.round;
+    this.eventCounter = snapshot.eventCounter;
   }
 
   getDefaultPolicies(): Policy[] {

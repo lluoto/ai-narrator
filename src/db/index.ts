@@ -15,8 +15,19 @@
 import { Database } from "bun:sqlite";
 import type { NPCPersonality, NPCMood, MemoryEntry } from "../agent/types";
 import { asNPCMood } from "../agent/types";
+import { projectNPCMemoryCache } from "../agent/memory-cache-projection";
 import * as fs from "fs";
 import * as path from "path";
+import {
+  createNPCStoreSnapshot,
+  NPC_STORE_SNAPSHOT_VERSION,
+  validateNPCStoreSnapshot,
+  type JsonObject,
+  type JsonValue,
+  type NPCStoreSnapshot,
+} from "./npc-store-snapshot";
+
+export * from "./npc-store-snapshot";
 
 // ============================================================
 // 数据库路径
@@ -94,6 +105,72 @@ interface StateRow {
   last_active: number;
 }
 
+/** One expected-to-next runtime transition for one NPC. */
+export interface NPCStoreRuntimeTransition {
+  expected: {
+    mood: NPCMood;
+    relationship: number;
+    interactionCount: number;
+  };
+  next: {
+    mood: NPCMood;
+    relationship: number;
+    interactionCount: number;
+  };
+  /** A mood event is optional; ordinary memory appends use their own bounded path. */
+  memory?: MemoryEntry;
+  /** Detached bounded live-cache candidate sealed before the transaction. */
+  memoryCacheCandidate?: readonly MemoryEntry[];
+  /** A player relationship contact increments its distinct interaction counter. */
+  updatePlayerRelationship: boolean;
+}
+
+export interface NPCStoreMemoryAppend {
+  npcId: string;
+  entry: MemoryEntry;
+  /** Opaque host-local identity; never derived from an NPC's public id. */
+  receipt: object;
+  /** Detached live-cache candidate sealed before this transaction begins. */
+  memoryCacheCandidate: readonly MemoryEntry[];
+}
+
+export interface NPCStoreMemoryAppendProjection {
+  readonly receipt: object;
+  readonly memories: readonly MemoryEntry[];
+}
+
+interface NPCStoreHostMemoryBatchCapability {
+  append(
+    entries: readonly NPCStoreMemoryAppend[],
+    consumer: {
+      begin(): void;
+      consume(projection: NPCStoreMemoryAppendProjection): void;
+      complete(): void;
+    },
+  ): void;
+}
+
+const npcStoreHostMemoryBatchCapabilities = new WeakMap<NPCStore, NPCStoreHostMemoryBatchCapability>();
+
+/**
+ * Lexical host authority for a multi-recipient memory append. It intentionally
+ * does not add a public NPCStore writer: AgentRegistry uses this capability
+ * after every receiver's live transition has already been planned.
+ */
+export function appendNPCStoreMemoryBatchForHost(
+  store: NPCStore,
+  entries: readonly NPCStoreMemoryAppend[],
+  consumer: {
+    begin(): void;
+    consume(projection: NPCStoreMemoryAppendProjection): void;
+    complete(): void;
+  },
+): void {
+  const capability = npcStoreHostMemoryBatchCapabilities.get(store);
+  if (!capability) throw new Error("NPCStore host memory batch capability is unavailable");
+  capability.append(entries, consumer);
+}
+
 // 库里存的是裸字符串，取出来要先确认它还在合法取值里再当联合类型用。
 // 老库、手改过的库、以及将来改了枚举而没迁移的库都会在这里被挡住 ——
 // 直接 as 会把一个不存在的情绪值放进整个系统。
@@ -138,6 +215,9 @@ export class NPCStore {
     this.db.run("PRAGMA journal_mode = WAL");
     this.db.run("PRAGMA foreign_keys = ON");
     this.initSchema();
+    npcStoreHostMemoryBatchCapabilities.set(this, {
+      append: (entries, consumer) => this.#appendMemoryBatchWithRetention(entries, consumer),
+    });
   }
 
   /** 关闭数据库连接 */
@@ -148,6 +228,163 @@ export class NPCStore {
   /** 获取底层 Database 实例（供高级查询） */
   get raw() {
     return this.db;
+  }
+
+  /** Export a consistent, portable snapshot of every NPC persistence table. */
+  exportSnapshot(): NPCStoreSnapshot {
+    const snapshot = this.db.transaction(() => {
+      const personalities = this.db.query(
+        "SELECT * FROM npc_personalities ORDER BY id"
+      ).all() as PersonalityRow[];
+      const memories = this.db.query(
+        "SELECT * FROM npc_memories ORDER BY id"
+      ).all() as MemoryRow[];
+      const relationships = this.db.query(
+        "SELECT * FROM npc_relationships ORDER BY npc_id, target_name"
+      ).all() as RelationshipRow[];
+      const states = this.db.query(
+        "SELECT * FROM npc_states ORDER BY npc_id"
+      ).all() as StateRow[];
+      const sequence = this.db.query(
+        "SELECT seq FROM sqlite_sequence WHERE name = 'npc_memories'"
+      ).get() as { seq: number } | null;
+
+      return createNPCStoreSnapshot({
+        version: NPC_STORE_SNAPSHOT_VERSION,
+        sequences: { npc_memories: sequence?.seq ?? 0 },
+        tables: {
+          npc_personalities: personalities.map((row) => ({
+            id: row.id,
+            name: row.name,
+            role: row.role,
+            personality: row.personality,
+            background: row.background,
+            speech_style: row.speech_style,
+            goals: parseSnapshotJSON<string[]>(row.goals, "npc_personalities.goals"),
+            knowledge: parseSnapshotJSON<string[]>(row.knowledge, "npc_personalities.knowledge"),
+            secrets: parseSnapshotJSON<string[]>(row.secrets, "npc_personalities.secrets"),
+            attitudes: parseSnapshotJSON<Record<string, string>>(row.attitudes, "npc_personalities.attitudes"),
+            ruleset: row.ruleset as "" | NonNullable<NPCPersonality["ruleset"]>,
+            traits: parseSnapshotJSON<JsonObject>(row.traits, "npc_personalities.traits"),
+            factions: parseSnapshotJSON<JsonValue[]>(row.factions, "npc_personalities.factions"),
+            initial_mood: row.initial_mood as NPCMood,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+          })),
+          npc_memories: memories.map((row) => ({
+            id: row.id,
+            npc_id: row.npc_id,
+            type: row.type as MemoryEntry["type"],
+            content: row.content,
+            importance: row.importance,
+            timestamp: row.timestamp,
+            scene_id: row.scene_id,
+            related_entities: parseSnapshotJSON<string[]>(row.related_entities, "npc_memories.related_entities"),
+            is_summary: row.is_summary as 0 | 1,
+          })),
+          npc_relationships: relationships.map((row) => ({
+            npc_id: row.npc_id,
+            target_name: row.target_name,
+            relationship: row.relationship,
+            interaction_count: row.interaction_count,
+            last_interaction: row.last_interaction,
+          })),
+          npc_states: states.map((row) => ({
+            npc_id: row.npc_id,
+            mood: row.mood as NPCMood,
+            relationship: row.relationship,
+            player_interaction_count: row.player_interaction_count,
+            last_active: row.last_active,
+          })),
+        },
+      });
+    })();
+    return structuredClone(snapshot);
+  }
+
+  /** Validate first, then atomically replace all NPC persistence tables. */
+  restoreSnapshot(snapshot: unknown): void {
+    const checked = validateNPCStoreSnapshot(snapshot);
+    const restore = this.db.transaction(() => {
+      // Delete child rows before personalities so replacement also works with FK enforcement enabled.
+      this.db.run("DELETE FROM npc_memories");
+      this.db.run("DELETE FROM npc_relationships");
+      this.db.run("DELETE FROM npc_states");
+      this.db.run("DELETE FROM npc_personalities");
+
+      const insertPersonality = this.db.prepare(`
+        INSERT INTO npc_personalities (
+          id, name, role, personality, background, speech_style, goals, knowledge,
+          secrets, attitudes, ruleset, traits, factions, initial_mood, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      try {
+        for (const row of checked.tables.npc_personalities) {
+          insertPersonality.run(
+            row.id, row.name, row.role, row.personality, row.background, row.speech_style,
+            JSON.stringify(row.goals), JSON.stringify(row.knowledge), JSON.stringify(row.secrets),
+            JSON.stringify(row.attitudes), row.ruleset, JSON.stringify(row.traits), JSON.stringify(row.factions),
+            row.initial_mood, row.created_at, row.updated_at,
+          );
+        }
+      } finally {
+        insertPersonality.finalize();
+      }
+
+      const insertMemory = this.db.prepare(`
+        INSERT INTO npc_memories (
+          id, npc_id, type, content, importance, timestamp, scene_id, related_entities, is_summary
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      try {
+        for (const row of checked.tables.npc_memories) {
+          insertMemory.run(
+            row.id, row.npc_id, row.type, row.content, row.importance, row.timestamp,
+            row.scene_id, JSON.stringify(row.related_entities), row.is_summary,
+          );
+        }
+      } finally {
+        insertMemory.finalize();
+      }
+
+      const insertRelationship = this.db.prepare(`
+        INSERT INTO npc_relationships (
+          npc_id, target_name, relationship, interaction_count, last_interaction
+        ) VALUES (?, ?, ?, ?, ?)
+      `);
+      try {
+        for (const row of checked.tables.npc_relationships) {
+          insertRelationship.run(
+            row.npc_id, row.target_name, row.relationship, row.interaction_count, row.last_interaction,
+          );
+        }
+      } finally {
+        insertRelationship.finalize();
+      }
+
+      const insertState = this.db.prepare(`
+        INSERT INTO npc_states (
+          npc_id, mood, relationship, player_interaction_count, last_active
+        ) VALUES (?, ?, ?, ?, ?)
+      `);
+      try {
+        for (const row of checked.tables.npc_states) {
+          insertState.run(
+            row.npc_id, row.mood, row.relationship, row.player_interaction_count, row.last_active,
+          );
+        }
+      } finally {
+        insertState.finalize();
+      }
+
+      // The AUTOINCREMENT high-water mark is not inferred from surviving rows.
+      this.db.run("DELETE FROM sqlite_sequence WHERE name = 'npc_memories'");
+      this.db.run(
+        "INSERT INTO sqlite_sequence (name, seq) VALUES ('npc_memories', ?)",
+        [checked.sequences.npc_memories],
+      );
+    });
+    restore();
   }
 
   // ============================================================
@@ -257,7 +494,11 @@ export class NPCStore {
         JSON.stringify(npc.traits ?? {}),
         JSON.stringify(npc.factions ?? []),
         npc.initialMood ?? "neutral",
-        now, id, now,
+        // COALESCE first binds the existing-row lookup id, then the new
+        // created_at value.  Reversing these wrote an NPC name into the
+        // INTEGER timestamp column, which made an otherwise valid store
+        // impossible to snapshot.
+        id, now, now,
       ]
     );
   }
@@ -285,13 +526,200 @@ export class NPCStore {
 
   /** 写入一条记忆 */
   addMemory(npcId: string, entry: MemoryEntry): void {
+    this.#insertMemory(npcId, entry);
+  }
+
+  /**
+   * Append one memory and apply the established durable retention policy as
+   * one SQLite transaction. This write authority is intentionally excluded
+   * from the GameSession NPCStore read facade.
+   */
+  appendMemoryWithRetention(
+    npcId: string,
+    entry: MemoryEntry,
+    memoryCacheCandidate: readonly MemoryEntry[] = [entry],
+  ): readonly MemoryEntry[] {
+    const append = this.db.transaction(() => {
+      return this.#appendMemoryWithRetention(npcId, entry, memoryCacheCandidate);
+    });
+    return append();
+  }
+
+  /**
+   * Commit one complete single-NPC runtime transition. The durable pre-state
+   * is checked inside this same transaction before any memory, relationship,
+   * or state row can change. This writer is intentionally excluded from the
+   * GameSession NPCStore read facade.
+  */
+  commitRuntimeTransition(npcId: string, transition: NPCStoreRuntimeTransition): readonly MemoryEntry[] | undefined {
+    const commit = this.db.transaction(() => {
+      this.#assertRuntimeTransitionPreState(npcId, transition);
+      const memoryProjection = transition.memory === undefined
+        ? undefined
+        : this.#appendMemoryWithRetention(
+          npcId,
+          transition.memory,
+          transition.memoryCacheCandidate ?? [transition.memory],
+        );
+      if (transition.updatePlayerRelationship) this.#upsertPlayerRelationship(npcId, transition.next.relationship);
+      this.#upsertState(npcId, transition.next.mood, transition.next.relationship, transition.next.interactionCount);
+      return memoryProjection;
+    });
+    return commit();
+  }
+
+  #assertRuntimeTransitionPreState(npcId: string, transition: NPCStoreRuntimeTransition): void {
+    const state = this.db.query(
+      "SELECT mood, relationship, player_interaction_count FROM npc_states WHERE npc_id = ?",
+    ).get(npcId) as Pick<StateRow, "mood" | "relationship" | "player_interaction_count"> | null;
+    const expected = transition.expected;
+    if (state !== null) {
+      if (state.mood !== expected.mood
+        || state.relationship !== expected.relationship
+        || state.player_interaction_count !== expected.interactionCount) {
+        throw new Error(`NPC runtime transition pre-state disagrees for ${npcId}`);
+      }
+    } else {
+      const personality = this.db.query(
+        "SELECT initial_mood FROM npc_personalities WHERE id = ?",
+      ).get(npcId) as Pick<PersonalityRow, "initial_mood"> | null;
+      const initialMood = personality === null ? undefined : (asNPCMood(personality.initial_mood) ?? "neutral");
+      if (expected.relationship !== 0 || expected.interactionCount !== 0
+        || (initialMood !== undefined && expected.mood !== initialMood)) {
+        throw new Error(`NPC runtime transition pre-state disagrees for ${npcId}`);
+      }
+    }
+
+    const relationship = this.db.query(
+      "SELECT relationship FROM npc_relationships WHERE npc_id = ? AND target_name = 'player'",
+    ).get(npcId) as Pick<RelationshipRow, "relationship"> | null;
+    if (relationship === null) {
+      if (expected.relationship !== 0) {
+        throw new Error(`NPC runtime transition pre-state disagrees for ${npcId}`);
+      }
+    } else if (relationship.relationship !== expected.relationship) {
+      throw new Error(`NPC runtime transition pre-state disagrees for ${npcId}`);
+    }
+  }
+
+  #appendMemoryWithRetention(
+    npcId: string,
+    entry: MemoryEntry,
+    memoryCacheCandidate: readonly MemoryEntry[],
+  ): readonly MemoryEntry[] {
+    this.#insertMemory(npcId, entry);
+    if (this.#countMemories(npcId) > 200) this.#pruneMemories(npcId, 100);
+    // This read/validation happens within the same transaction as INSERT and
+    // retention DELETE.  A malformed durable row or projection error aborts
+    // the whole change; callers receive a detached publication value only
+    // after the transaction commits.
+    return projectNPCMemoryCache(memoryCacheCandidate, this.#readRetainedMemories(npcId));
+  }
+
+  #appendMemoryBatchWithRetention(
+    entries: readonly NPCStoreMemoryAppend[],
+    consumer: {
+      begin(): void;
+      consume(projection: NPCStoreMemoryAppendProjection): void;
+      complete(): void;
+    },
+  ): void {
+    const append = this.db.transaction(() => {
+      if (!consumer || typeof consumer.begin !== "function" || typeof consumer.consume !== "function"
+        || typeof consumer.complete !== "function") {
+        throw new Error("NPCStore host memory batch projection consumer is invalid");
+      }
+      const receipts = new Set<object>();
+      for (const entry of entries) {
+        if (!entry.receipt || typeof entry.receipt !== "object" || receipts.has(entry.receipt)) {
+          throw new Error("NPCStore host memory batch receipts must be unique opaque objects");
+        }
+        if (!Array.isArray(entry.memoryCacheCandidate)) {
+          throw new Error("NPCStore host memory batch cache candidate is invalid");
+        }
+        receipts.add(entry.receipt);
+      }
+      // The host uses begin() to allocate and validate its receipt-to-plan
+      // binding. It must happen inside this callback before any write, so a
+      // failure has exactly the same rollback boundary as a failed bind.
+      consumer.begin();
+      const projections: NPCStoreMemoryAppendProjection[] = [];
+      for (const entry of entries) {
+        projections.push(Object.freeze({
+          receipt: entry.receipt,
+          memories: this.#appendMemoryWithRetention(
+            entry.npcId,
+            entry.entry,
+            entry.memoryCacheCandidate,
+          ),
+        }));
+      }
+      for (const projection of projections) consumer.consume(projection);
+      // Both the per-receipt binding and its all-receipts completeness proof
+      // execute before COMMIT. A throw here rolls back INSERT, retention
+      // DELETE, sqlite_sequence, and every pending plan binding together.
+      consumer.complete();
+    });
+    append();
+  }
+
+  #readRetainedMemories(npcId: string): MemoryEntry[] {
+    const rows = this.db.query(
+      "SELECT * FROM npc_memories WHERE npc_id = ? ORDER BY id ASC",
+    ).all(npcId) as MemoryRow[];
+    return rows.map((row) => this.#validatedRetainedMemory(row));
+  }
+
+  #validatedRetainedMemory(row: MemoryRow): MemoryEntry {
+    if (!MEMORY_TYPES.includes(row.type as MemoryEntry["type"])
+      || !Number.isFinite(row.timestamp)
+      || !Number.isFinite(row.importance)
+      || typeof row.content !== "string"
+      || typeof row.scene_id !== "string"
+      || (row.is_summary !== 0 && row.is_summary !== 1)) {
+      throw new Error("NPC durable memory retention projection is invalid");
+    }
+    let relatedEntities: unknown;
+    try {
+      relatedEntities = JSON.parse(row.related_entities);
+    } catch {
+      throw new Error("NPC durable memory retention projection is invalid");
+    }
+    if (!Array.isArray(relatedEntities) || relatedEntities.some((entity) => typeof entity !== "string")) {
+      throw new Error("NPC durable memory retention projection is invalid");
+    }
+    return {
+      timestamp: row.timestamp,
+      type: row.type as MemoryEntry["type"],
+      content: row.content,
+      importance: row.importance,
+      ...(row.scene_id === "" ? {} : { scene_id: row.scene_id }),
+      ...(relatedEntities.length === 0 ? {} : { related_entities: relatedEntities }),
+      ...(row.is_summary === 1 ? { is_summary: true } : {}),
+    };
+  }
+
+  #upsertPlayerRelationship(npcId: string, relationship: number): void {
     this.db.run(
-      `INSERT INTO npc_memories (npc_id, type, content, importance, timestamp, scene_id, related_entities)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO npc_relationships (npc_id, target_name, relationship, interaction_count, last_interaction)
+       VALUES (?, 'player', ?, 1, ?)
+       ON CONFLICT(npc_id, target_name) DO UPDATE SET
+        relationship = excluded.relationship,
+        interaction_count = interaction_count + 1,
+        last_interaction = excluded.last_interaction`,
+      [npcId, relationship, Date.now()],
+    );
+  }
+
+  #insertMemory(npcId: string, entry: MemoryEntry): void {
+    this.db.run(
+      `INSERT INTO npc_memories (npc_id, type, content, importance, timestamp, scene_id, related_entities, is_summary)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         npcId, entry.type, entry.content, entry.importance, entry.timestamp,
         entry.scene_id ?? "",
         JSON.stringify(entry.related_entities ?? []),
+        entry.is_summary ? 1 : 0,
       ]
     );
   }
@@ -299,19 +727,24 @@ export class NPCStore {
   /** 批量写入记忆 */
   addMemories(npcId: string, entries: MemoryEntry[]): void {
     const insert = this.db.prepare(
-      `INSERT INTO npc_memories (npc_id, type, content, importance, timestamp, scene_id, related_entities)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO npc_memories (npc_id, type, content, importance, timestamp, scene_id, related_entities, is_summary)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const tx = this.db.transaction(() => {
       for (const e of entries) {
         insert.run(
           npcId, e.type, e.content, e.importance, e.timestamp,
           e.scene_id ?? "",
-          JSON.stringify(e.related_entities ?? [])
+          JSON.stringify(e.related_entities ?? []),
+          e.is_summary ? 1 : 0,
         );
       }
     });
-    tx();
+    try {
+      tx();
+    } finally {
+      insert.finalize();
+    }
   }
 
   /** 获取 NPC 最近记忆（按时间倒序，limit 控制条数） */
@@ -346,8 +779,7 @@ export class NPCStore {
     return rows.map(rowToMemory);
   }
 
-  /** 裁剪低重要性记忆（保留 top N 条高重要性，删除其他） */
-  pruneMemories(npcId: string, keepTop = 100): number {
+  #pruneMemories(npcId: string, keepTop: number): number {
     // 获取第 keepTop 条的重要性阈值
     const threshold = this.db.query(
       `SELECT importance FROM npc_memories WHERE npc_id = ? ORDER BY importance DESC LIMIT 1 OFFSET ?`
@@ -363,6 +795,10 @@ export class NPCStore {
 
   /** 获取 NPC 记忆总数 */
   countMemories(npcId: string): number {
+    return this.#countMemories(npcId);
+  }
+
+  #countMemories(npcId: string): number {
     const row = this.db.query("SELECT COUNT(*) as cnt FROM npc_memories WHERE npc_id = ?").get(npcId) as { cnt: number } | null;
     return row?.cnt ?? 0;
   }
@@ -425,6 +861,10 @@ export class NPCStore {
 
   /** 更新 NPC 状态 */
   updateState(npcId: string, mood: NPCMood, relationship: number, interactionCount: number): void {
+    this.#upsertState(npcId, mood, relationship, interactionCount);
+  }
+
+  #upsertState(npcId: string, mood: NPCMood, relationship: number, interactionCount: number): void {
     this.db.run(
       `INSERT INTO npc_states (npc_id, mood, relationship, player_interaction_count, last_active)
        VALUES (?, ?, ?, ?, ?)
@@ -469,6 +909,14 @@ function rowToMemory(row: MemoryRow): MemoryEntry {
     related_entities: safeJSONParse(row.related_entities, undefined),
     is_summary: row.is_summary === 1,
   };
+}
+
+function parseSnapshotJSON<T>(serialized: string, field: string): T {
+  try {
+    return JSON.parse(serialized) as T;
+  } catch {
+    throw new Error(`Cannot export NPC store snapshot: ${field} contains invalid JSON`);
+  }
 }
 
 function safeJSONParse(str: string | undefined, fallback: any): any {

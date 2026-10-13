@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 function newSession() {
   return new GameSession(
@@ -29,9 +30,11 @@ describe("sceneBgm — 模组映射下发", () => {
 
   it("模组未声明的场景不给床，而不是给个错的", async () => {
     const s = newSession();
-    await s.act("加载模组 印斯茅斯的阴影");
-    s.world.registerScene("无名巷", "无名巷");
-    s.setScene("无名巷");
+    // A normal free move registers an unscoped scene through GameSession's
+    // controlled write path before the package supplies its BGM map.
+    expect((await s.act("前往 无名巷")).error).toBeUndefined();
+    expect((await s.act("加载模组 印斯茅斯的阴影")).error).toBeUndefined();
+    expect(activateRegisteredGameSessionSceneForTest(s, "无名巷")).toBe(true);
     expect(s.getState().bgm).toBeUndefined();
   });
 });
@@ -45,7 +48,7 @@ describe("sceneBgm — 床跟随界面显示的场景", () => {
     await s.act("加载模组 印斯茅斯的阴影");
     const posBefore = s.getPlayerPosition();
 
-    expect(s.setScene("innsmouth_church")).toBe(true);
+    expect(activateRegisteredGameSessionSceneForTest(s, "innsmouth_church")).toBe(true);
 
     const st = s.getState();
     expect(st.scene).toBe("innsmouth_church");
@@ -57,7 +60,7 @@ describe("sceneBgm — 床跟随界面显示的场景", () => {
   it("同一次响应里 scene 与 bgm 必须指向同一个场景", async () => {
     const s = newSession();
     await s.act("加载模组 阿卡姆档案检查");
-    s.setScene("arkham_library_basement");
+    activateRegisteredGameSessionSceneForTest(s, "arkham_library_basement");
 
     const st = s.getState();
     expect(st.scene).toBe("arkham_library_basement");
@@ -67,11 +70,7 @@ describe("sceneBgm — 床跟随界面显示的场景", () => {
   it("玩家正常移动（两个源一致）时行为不变", async () => {
     const s = newSession();
     await s.act("加载模组 印斯茅斯的阴影");
-    s.setScene("innsmouth_church");
-    s.world.upsertEntity({
-      id: "player", name: "调查员", type: "pc", hp: 12, maxHp: 12, ac: 10,
-      status: [], position: "innsmouth_church",
-    } as never);
+    expect((await s.act("前往 innsmouth_church")).error).toBeUndefined();
     expect(s.getState().bgm).toBe("sacred");
   });
 });

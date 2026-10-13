@@ -71,7 +71,7 @@ type ConstraintAction =
  *
  * 开发·意图与约束补漏 任务3：约束系统原本只有一个检查入口
  * （checkDialogueText，服务 NPC 对话），KP 自由叙事（narrateOutcome，
- * game-session.ts 里 `this.kp.narrateOutcome(...)`）完全没接进来——
+ * game-session.ts 里的 GameSession 私有 canonical KP narration path（`#kpRaw.narrateOutcome(...)`）完全没接进来——
  * "冰箱里面空荡荡的，只有几层隔板和后壁"就是从这条路出来的，连检查都
  * 没经过。但不能直接把 KP 叙事也接到 checkDialogueText：那五条默认约束
  * 全是照着"NPC 对话"的语境写的，`dialogue_meta_location` 拦的是"NPC
@@ -120,6 +120,12 @@ interface WorldConstraint {
 /** 检查时传入的上下文 */
 interface ConstraintContext {
   year?: number;
+  /**
+   * Legacy callers without an era remain conservative: year-ranged rules
+   * still apply.  A caller with a source-reviewed but non-year era may opt
+   * into skipping only rules that actually carry a year range.
+   */
+  skipYearRangeWhenUnknown?: boolean;
   sceneId?: string;
   /** 匹配文本（DialogueCheck 时传入） */
   text?: string;
@@ -146,6 +152,12 @@ interface ConstraintContext {
    * 与匹配器判定"这是场景里的一个对象"用的同一套认定，不另起一套。
    */
   undiscoveredClueKeys?: string[];
+  /**
+   * Exact technology terms from source-reviewed, currently player-visible
+   * module text.  This is intentionally a narrow exception to the one
+   * generic technology rule; it is never a general narration allow-list.
+   */
+  sourceReviewedTechnologyTerms?: readonly string[];
   /**
    * 开发·约束层补角色实体域 N9（todo-56）：登记表
    * （`scene-npc-noun-registry.ts` 的 `CHARACTER_NOUN_REGISTRY`）里
@@ -282,14 +294,23 @@ export class ConstraintEngine {
   checkNarration(
     text: string,
     opts: {
+      year?: number;
+      /** Opt-in only; ordinary callers preserve legacy conservative handling. */
+      skipYearRangeWhenUnknown?: boolean;
       sceneId?: string;
       ruleset?: import("../rules/rules-engine").RulesetId;
       undiscoveredClueKeys?: string[];
+      sourceReviewedTechnologyTerms?: readonly string[];
     } = {},
   ): ConstraintAction | null {
     const ctx: ConstraintContext = {
-      text, sceneId: opts.sceneId, ruleset: opts.ruleset,
+      text,
+      year: typeof opts.year === "number" && Number.isFinite(opts.year) ? opts.year : undefined,
+      skipYearRangeWhenUnknown: opts.skipYearRangeWhenUnknown === true,
+      sceneId: opts.sceneId,
+      ruleset: opts.ruleset,
       undiscoveredClueKeys: opts.undiscoveredClueKeys,
+      sourceReviewedTechnologyTerms: opts.sourceReviewedTechnologyTerms,
     };
     for (const c of this.constraints) {
       if (!this.hasScope(c, "narration")) continue;
@@ -326,7 +347,11 @@ export class ConstraintEngine {
 
   private matchesYear(c: WorldConstraint, ctx: ConstraintContext): boolean {
     if (!c.yearRange) return true;
-    if (ctx.year === undefined) return true; // 没提供年份，放过
+    // Historical callers intentionally remain conservative when their era is
+    // missing.  Only the compiled, source-reviewed path opts in to skipping a
+    // year-range rule for an unknown/descriptive era; no-year privacy guards
+    // still run normally.
+    if (ctx.year === undefined) return !ctx.skipYearRangeWhenUnknown;
     const [start, end] = c.yearRange;
     if (start !== undefined && ctx.year < start) return false;
     if (end !== undefined && ctx.year > end) return false;
@@ -358,6 +383,53 @@ export class ConstraintEngine {
 export const DIALOGUE_FABRICATED_CHARACTER_BLOCK_MESSAGE =
   "NPC 对话把不存在的角色当成场景成分说了出来，与模组事实矛盾";
 
+/**
+ * One policy-owned token vocabulary backs both the generic 1920s guard and
+ * the compiled host's source-exact exception.  Keep longer compounds first:
+ * a reviewed `电脑` must not silently authorize `笔记本电脑`.
+ */
+const ANACHRONISTIC_TECHNOLOGY_TERMS = [
+  "笔记本电脑", "平板电脑", "移动电话", "智能手机", "无线网络", "卫星导航",
+  "数码相机", "电子支付", "智能设备", "放下听筒", "接起电话", "挂断电话",
+  "他打来电话", "她打来电话", "给他打电话", "给她打电话", "打他电话", "打她电话",
+  "互联网", "wifi", "wi-fi", "蓝牙", "扫码", "二维码", "微信", "短信",
+  "短视频", "无人机", "手机", "电脑", "上网", "gps",
+] as const;
+
+const ANACHRONISTIC_TECHNOLOGY_PATTERN = new RegExp(
+  ANACHRONISTIC_TECHNOLOGY_TERMS
+    .slice()
+    .sort((left, right) => right.length - left.length)
+    .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|"),
+  "gi",
+);
+
+function technologyTermsIn(text: string): string[] {
+  return [...text.matchAll(ANACHRONISTIC_TECHNOLOGY_PATTERN)]
+    .map((match) => match[0]!.toLocaleLowerCase("en-US"));
+}
+
+/**
+ * Extract only the shared policy's exact lexical terms from already-trusted
+ * text.  This function does not establish trust itself; the compiled host is
+ * responsible for supplying source-reviewed, player-visible fields only.
+ */
+export function sourceReviewedNarrationTechnologyTerms(texts: readonly string[]): string[] {
+  return [...new Set(texts.flatMap((text) => typeof text === "string" ? technologyTermsIn(text) : []))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function mentionsUnreviewedAnachronisticTechnology(ctx: ConstraintContext): boolean {
+  if (!ctx.text) return false;
+  const reviewed = new Set(
+    (ctx.sourceReviewedTechnologyTerms ?? [])
+      .filter((term): term is string => typeof term === "string")
+      .map((term) => term.toLocaleLowerCase("en-US")),
+  );
+  return technologyTermsIn(ctx.text).some((term) => !reviewed.has(term));
+}
+
 export const DEFAULT_CONSTRAINTS: WorldConstraint[] = [
   // ── 物品年代约束 ──
   {
@@ -385,7 +457,10 @@ export const DEFAULT_CONSTRAINTS: WorldConstraint[] = [
     // 这份黑名单是字面词表，KP 自由叙事同样不该说"扫码""wifi"这些词，
     // 误伤风险和 NPC 对话一样低——两个 scope 都给。
     scope: ["dialogue", "narration"],
-    matchText: /手机|移动电话|智能手机|电脑|平板电脑|笔记本电脑|互联网|无线网络|上网|wifi|wi-fi|蓝牙|gps|卫星导航|扫码|二维码|微信|短信|短视频|数码相机|无人机|电子支付|智能设备|打[他她]电话|给[他她]打电话|[他她]打来电话|挂断电话|接起电话|放下听筒/i,
+    // The predicate sees the full narration context, so the compiled durable
+    // host may permit only a source-reviewed exact token.  A single reviewed
+    // token never opens another token or a longer compound containing it.
+    matchPredicate: mentionsUnreviewedAnachronisticTechnology,
     yearRange: [undefined, 1940],
     action: { type: "block", blockMessage: "现代个人通讯/科技词汇不应出现在 1920s 场景中" },
   },
@@ -498,7 +573,7 @@ export const DEFAULT_CONSTRAINTS: WorldConstraint[] = [
   },
 ];
 
-const CLUE_DENIAL_PHRASE = /空荡荡|空空如也|一无所获|什么都没有|没有(?:任何|发现)|已经(?:搜|查|检查)过了?/;
+const CLUE_DENIAL_PHRASE = /空荡荡|空空如也|空无一物|一无所获|什么都没有|没有(?:任何|发现)|已经(?:搜|查|检查)过了?/;
 
 /**
  * 叙事文本里是否有哪一句同时命中"否认措辞"和"场景里一个未发现线索的
@@ -538,9 +613,14 @@ export function checkDialogueText(
 export function checkNarrationText(
   text: string,
   opts: {
+    year?: number;
+    /** Compiled host only: unknown reviewed era skips year-ranged rules. */
+    skipYearRangeWhenUnknown?: boolean;
     sceneId?: string;
     ruleset?: import("../rules/rules-engine").RulesetId;
     undiscoveredClueKeys?: string[];
+    /** Exact terms derived from trusted, currently player-visible source text. */
+    sourceReviewedTechnologyTerms?: readonly string[];
   } = {},
 ): ConstraintAction | null {
   const engine = new ConstraintEngine(DEFAULT_CONSTRAINTS);

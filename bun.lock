@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "aitrpg-poc",
+      "name": "ai-narrator",
       "dependencies": {
         "pdf-parse": "^2.4.5",
         "yaml": "^2.6.0",

@@ -1,4 +1,4 @@
-// AI TRPG POC — 多 Agent 游戏主循环（v2：含世界状态管理器）
+// AI Narrator — 多 Agent 游戏主循环（v2：含世界状态管理器）
 // 运行: bun run src/index.ts
 //
 // 流程:
@@ -20,7 +20,7 @@ import { RulesEngine, toCombatResult, type RulesetId } from "./rules/rules-engin
 import { CoCEngine, SanityEngine, SUCCESS_LEVEL_LABELS, sanOutcomeLabel } from "./rules/coc-engine";
 
 import { KPAgent } from "./agent/kp-agent";
-import { AgentRegistry } from "./agent/agent-registry";
+import { AgentRegistry, fanoutAgentRegistryMessageForHost } from "./agent/agent-registry";
 import { WorldStateManager } from "./state/world-state-manager";
 import type { WorldEntity } from "./types";
 import { NPCCombatEngine, NPC_ARMED_SKILL, NPC_UNARMED_SKILL } from "./combat/npc-combat";
@@ -196,15 +196,7 @@ function addMessage(
   discoverer?: string
 ) {
   const msg: AgentMessage = { speaker, content, type };
-  session.push(msg, visibility, discoverer);
-
-  const importance = type === "narration" ? 7 : 5;
-  for (const npc of registry.getAll()) {
-    if (npc.name !== speaker) {
-      if (type === "narration") npc.rememberEvent(content, importance);
-      else npc.rememberDialogue(speaker, content, importance);
-    }
-  }
+  fanoutAgentRegistryMessageForHost(registry, session, msg, visibility, discoverer);
 }
 
 let round = 0;
@@ -868,7 +860,7 @@ function handleNPCCommand(input: string, rl: any) {
 async function main() {
   console.clear();
   console.log("═".repeat(60));
-  console.log("  AI TRPG — 多 Agent 引擎（含世界状态管理器）");
+  console.log("  AI Narrator — 多 Agent 引擎（含世界状态管理器）");
   console.log("═".repeat(60));
   console.log(`  LLM: ${config.model}`);
   console.log(`  NPC: ${registry.getAllNames().join("、")}`);
@@ -985,8 +977,8 @@ async function main() {
           archetype
         );
         cocCharacter = cocChar;
-        sanity.state.currentSAN = cocChar.attributes.power ?? 50;
-        sanity.state.maxSAN = cocChar.attributes.power ?? 50;
+        const power = cocChar.attributes.power ?? 50;
+        sanity.restoreState({ ...sanity.state, currentSAN: power, maxSAN: power });
         activeRuleset = "cosmic-horror";
         console.log(`\n  📜 ${cocChar.name} [${archetype.label}] - CoC 7e`);
         console.log(`  HP:${cocChar.hp}  AC:${cocChar.ac}  MOV:${cocChar.move}  DB:${cocChar.damageBonus}`);

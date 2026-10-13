@@ -15,6 +15,8 @@
 
 import { describe, it, expect, beforeEach } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { InvestigationEngine } from "../investigation/investigation-engine";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const LLM = {
   apiKey: "sk-placeholder",
@@ -34,6 +36,12 @@ function currentScene(): string {
   return session.world.getCurrentState().scene;
 }
 
+/** Enter a real module scene whose source-declared clue costs 1/1d6 SAN. */
+async function enterRitualSite(): Promise<void> {
+  expect((await session.act("加载模组 普瑞米尔的谷仓")).error).toBeUndefined();
+  expect(activateRegisteredGameSessionSceneForTest(session, "维修间")).toBe(true);
+}
+
 beforeEach(() => {
   process.env.LLM_API_KEY = "";
   process.env.OPENAI_API_KEY = "";
@@ -42,19 +50,19 @@ beforeEach(() => {
 
 describe("调查动作接入 InvestigationEngine", () => {
   it("场景有未发现线索时，调查会扣 SAN", async () => {
-    session.investigation.registerSceneClue(currentScene(), "ritual_site");
+    await enterRitualSite();
     const before = currentSan();
 
-    await session.act("调查");
+    await session.act("查看母女的缸中脑");
 
     expect(currentSan()).toBeLessThan(before);
   });
 
   it("扣掉的 SAN 落到真相源，不只是进程内引擎", async () => {
-    session.investigation.registerSceneClue(currentScene(), "ritual_site");
+    await enterRitualSite();
     const before = currentSan();
 
-    await session.act("调查");
+    await session.act("查看母女的缸中脑");
 
     const persisted = session.world.getPlayerSanity(session.activePlayerId)?.currentSAN;
     expect(persisted).toBe(currentSan());
@@ -62,11 +70,15 @@ describe("调查动作接入 InvestigationEngine", () => {
   });
 
   it("线索已被该调查员发现后，再调查不重复扣 SAN", async () => {
-    session.investigation.registerSceneClue(currentScene(), "ritual_site");
-    session.investigation.markDiscovered("ritual_site", session.activePlayerId);
+    await enterRitualSite();
+    const random = Math.random;
+    Math.random = () => 0;
+    try {
+      expect((await session.act("查看母女的缸中脑")).error).toBeUndefined();
+    } finally { Math.random = random; }
     const before = currentSan();
 
-    await session.act("调查");
+    await session.act("查看母女的缸中脑");
 
     expect(currentSan()).toBe(before);
   });
@@ -89,41 +101,39 @@ describe("调查动作接入 InvestigationEngine", () => {
   // 于是模组线索应当可被调查解析——这才是这套数据本来的用途。
   describe("模组注册的线索", () => {
     it("带 sanCost 的模组线索，调查会按它扣 SAN", async () => {
-      session.investigation.registerSceneClue(currentScene(), "barn_hideout", "谷仓里的临时住所", "1/1d6");
+      await enterRitualSite();
       const before = currentSan();
 
-      await session.act("调查");
+      await session.act("查看母女的缸中脑");
 
       expect(currentSan()).toBeLessThan(before);
     });
 
     it("不带 sanCost 的模组线索仍可被解析，只是不扣 SAN", async () => {
-      session.investigation.registerSceneClue(currentScene(), "barn_hideout", "谷仓里的临时住所");
-      const before = currentSan();
-
-      await session.act("调查");
-
-      expect(currentSan()).toBe(before);
-      expect(session.investigation.hasClueType("barn_hideout")).toBe(true);
+      const engine = new InvestigationEngine();
+      engine.registerSceneClue("test-scene", "test-clue", "test clue");
+      expect(engine.investigateCoC("test-clue", { spot_hidden: 100 }, "probe").sanLost).toBe(0);
+      expect(engine.hasClueType("test-clue")).toBe(true);
     });
 
     it("不得覆盖 investigation.yaml 里已有的同名定义", () => {
-      expect(session.investigation.hasClueType("ritual_site")).toBe(true);
+      const engine = new InvestigationEngine();
+      expect(engine.hasClueType("ritual_site")).toBe(true);
 
-      session.investigation.registerSceneClue(currentScene(), "ritual_site", "模组自己的描述", "0/1");
+      engine.registerSceneClue(currentScene(), "ritual_site", "模组自己的描述", "0/1");
 
       // 合成定义只有一句描述和一条 spot_hidden 路径；yaml 版有多技能路径与分层文本。
       // 覆盖即数据丢失，所以已有定义必须原样保留 —— 用 san_cost 作可判定的观测点。
-      const resolved = session.investigation.investigateCoC("ritual_site", { occult: 50 }, "probe");
+      const resolved = engine.investigateCoC("ritual_site", { occult: 50 }, "probe");
       expect(resolved.sanCost).toBe("1/1d6");
     });
   });
 
   it("SAN 不会被扣成负数", async () => {
     session.setPlayerSan(session.activePlayerId, 1);
-    session.investigation.registerSceneClue(currentScene(), "ritual_site");
+    await enterRitualSite();
 
-    await session.act("调查");
+    await session.act("查看母女的缸中脑");
 
     expect(currentSan()).toBeGreaterThanOrEqual(0);
   });

@@ -13,6 +13,7 @@
 import { describe, test, expect } from "bun:test";
 import { SanityEngine } from "../rules/coc-engine";
 import { InvestigationEngine } from "../investigation/investigation-engine";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 describe("线索的 SAN 骰子要真的掷", () => {
   // ⚠ 原实现是：
@@ -112,23 +113,18 @@ describe("疯狂要播报给玩家，不能只在状态里", () => {
     const { GameSession } = await import("../api/game-session");
     const s = new GameSession(`md-${Math.random()}`, "cosmic-horror", {
       apiKey: "sk-x", baseUrl: "http://localhost:9999", model: "m", maxTokens: 64, temperature: 0,
-    });
-    await s.act("创建角色 investigator 甲");
-    const anyS = s as unknown as {
-      investigation: { registerSceneClue: (a: string, b: string, c?: string, d?: string) => void };
-      resolveSceneClue: (t: string, m: (x: string) => number) => boolean;
-      sanity: { state: { temporaryInsanity: boolean } };
-    };
-    anyS.investigation.registerSceneClue("tavern", "corpse", "一具尸体", "1/1d6");
+    }, "investigator", "甲");
+    expect((await s.act("加载模组 普瑞米尔的谷仓")).error).toBeUndefined();
+    expect(activateRegisteredGameSessionSceneForTest(s, "维修间")).toBe(true);
 
-    const lines: string[] = [];
     const real = Math.random;
     Math.random = () => 0.999; // 检定失败 + 1d6 掷出 6 → 必触发
-    try { anyS.resolveSceneClue("corpse", (x) => { lines.push(x); return 0; }); }
+    let result: { events: Array<{ content: string }> } | undefined;
+    try { result = await s.act("查看母女的缸中脑"); }
     finally { Math.random = real; }
 
-    const text = lines.join("\n");
-    expect(anyS.sanity.state.temporaryInsanity).toBe(true); // 状态确实变了
+    const text = result!.events.map((event) => event.content).join("\n");
+    expect(s.sanity.state.temporaryInsanity).toBe(true); // 状态确实变了
     expect(text).toContain("临时疯狂");                      // 玩家也确实看见了
     expect(text.length).toBeGreaterThan("临时疯狂".length + 8); // 且带了疯狂表的内容
   });

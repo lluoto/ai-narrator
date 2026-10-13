@@ -2,7 +2,7 @@
 // 游戏内时间系统 — 昼夜循环 + 回合推进
 // ============================================================
 
-type TimePeriod =
+export type TimePeriod =
   | "dawn" | "morning" | "noon" | "afternoon"
   | "dusk" | "evening" | "night" | "late_night";
 
@@ -28,6 +28,19 @@ const PERIOD_ORDER: TimePeriod[] = [
   "dawn", "morning", "noon", "afternoon",
   "dusk", "evening", "night", "late_night",
 ];
+
+/**
+ * 同一份时段事实既供行动效果判定，也供过夜休息判定。
+ *
+ * 黄昏起算夜间；不要让各个调用方各自维护一份 "night" 字符串数组。
+ */
+export const NIGHT_PERIODS: readonly TimePeriod[] = [
+  "dusk", "evening", "night", "late_night",
+];
+
+export function isNightPeriod(period: TimePeriod): boolean {
+  return NIGHT_PERIODS.includes(period);
+}
 
 /** 每时段最多回合数，超过则推进下一时段 */
 const TICKS_PER_PERIOD = 3;

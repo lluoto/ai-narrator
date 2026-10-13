@@ -96,6 +96,21 @@ function asText(value: unknown): string {
   return "";
 }
 
+/**
+ * Prompt rendering accepts historical JSONL fields that are structurally less
+ * strict than the TypeScript compatibility facade. Preserve their selection
+ * data, but normalize every rendered field through asText at the boundary.
+ */
+function asPromptEntry(entry: V18Entry): V18Entry {
+  const rendered: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(entry)) {
+    rendered[key] = key === "properties" && value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).map(([property, propertyValue]) => [property, asText(propertyValue)]))
+      : asText(value);
+  }
+  return rendered as V18Entry;
+}
+
 function getEntryName(e: V18Entry): string {
   return asText(e.name) || asText(e.trigger) || asText(e.cause) || asText(e.type) || "未知";
 }
@@ -110,9 +125,10 @@ function getEntryText(e: V18Entry): string {
 
 /** 提取势力关系文本（兼容 v15+v16 的 name/description 结构和 v13 的 a/b/relation 结构） */
 function extractRelationText(e: V18Entry): string {
+  e = asPromptEntry(e);
   if (e.name && e.description) {
     // v15+v16 风格: name="贵族与巫师的关系", description="..."
-    const props = e.properties ? Object.values(e.properties).join("; ") : "";
+    const props = asText(e.properties);
     return `${e.name}: ${e.description.slice(0, 60)}${props ? ` (${props})` : ""}`;
   }
   // v13 风格 (a/b/relation) — v17 可能保留
@@ -124,6 +140,7 @@ function extractRelationText(e: V18Entry): string {
 
 /** 提取行为模式文本 */
 function extractBehaviorText(e: V18Entry): string {
+  e = asPromptEntry(e);
   if (e.trigger && e.response) {
     // v17 风格
     return `当「${e.trigger}」→ 倾向于「${e.response}」`;
@@ -234,6 +251,7 @@ export class WorldModelIntegrator {
 
     const resourceContext = relevantResources.length > 0
       ? relevantResources.map((r: V18Entry) => {
+          r = asPromptEntry(r);
           const name = r.name || "未知资源";
           const scarcity = (r as any).scarcity || r.properties?.accessibility || "未知";
           const drives = (r as any).drives || r.description?.slice(0, 60) || "";
@@ -253,6 +271,7 @@ export class WorldModelIntegrator {
       : [];
 
     const dndRuleHints = relevantDnd.map((r: V18Entry) => {
+      r = asPromptEntry(r);
       const name = r.name || "规则";
       const mechanic = r.mechanic ? ` (机制: ${r.mechanic.slice(0, 60)})` : "";
       const mapping = r.dnd_mapping ? ` [D&D: ${r.dnd_mapping}]` : "";
@@ -397,7 +416,8 @@ export class WorldModelIntegrator {
         return text.includes(npcName.toLowerCase()) ||
                ctx.keywords.some((kw) => text.includes(kw.toLowerCase()));
       })
-      .slice(0, 3);
+      .slice(0, 3)
+      .map(asPromptEntry);
 
     if (relevant.length === 0) return "";
 
@@ -421,6 +441,7 @@ export class WorldModelIntegrator {
         })
         .slice(0, 5)
         .map((r: V18Entry) => {
+          r = asPromptEntry(r);
           const mapping = r.dnd_mapping ? ` [${r.dnd_mapping}]` : "";
           const mechanic = r.mechanic ? `: ${r.mechanic.slice(0, 80)}` : "";
           return `${r.name || "规则"}${mechanic}${mapping}`;

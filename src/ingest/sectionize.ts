@@ -2,11 +2,18 @@
 //
 // 把清洗后的逐页文本切成可寻址的块。锚点是清洗阶段特意保住的那两个：
 //   短的冒号结尾行 → 标题（场景名、小节名）
+//   有完整上下文依据的短独立行 → 标题（部分 PDF 的无冒号小节名）
 //   ▶ 开头的行     → 条目（全书 45 条，四个陷阱全在内）
 //
 // 层级不能拍平。▶捕兽夹 属于「农场外围」这个场景，扁平之后陷阱就不知道
 // 该挂到哪儿 —— 引擎里那对单数的 support.trapSceneId / trapClueId
 // 正是这么来的：一个场景只认得一个陷阱，另外三个成了死数据。
+
+import { parseExplicitSectionTitleLine, sectionTitleLines } from "./section-heading";
+
+const DISCOVERY_LIST_ACTION = /(搜索|搜查|查找|寻找|调查|发现|找到|检视|检查)/;
+const DISCOVERY_LIST_REFERENCE = /(?:(?:如下|下列|以下|这些|此处(?:的)?|这里(?:的)?)[^。！？；]{0,12}(?:物品|物件|东西|线索)|(?:物品|物件|东西|线索)[^。！？；]{0,12}(?:如下|下列|以下|包括|有))/;
+const DISCOVERY_ITEM_LABEL_MAX_LEN = 24;
 
 /** 一个条目：模组用 ▶ 标记的陷阱、可搜查物、规则说明 */
 export interface SectionItem {
@@ -62,27 +69,11 @@ export function sourceKey(ref: SourceRef): string {
 }
 
 /**
- * 标题行：短，且以冒号收尾。
+ * 显式标题行：短，且以冒号收尾。
  *
- * 与 clean-text 的 LABEL_MAX_LEN 同源同值 —— 那一层靠它决定「不要把这行
- * 吸进上一段」，这一层靠它决定「这行是个标题」。两处必须一致，
- * 否则清洗保住了的边界会在这里被无视。
+ * 无冒号标题需要整页上下文，交由 section-heading.ts 的共享规则识别；
+ * 本兼容入口只回答单行能确认的显式标题。
  */
-const TITLE_MAX_LEN = 12;
-
-/**
- * 标题行。开头的 ▶ 是可选的 —— 原文里有一类行长这样：
- *
- *     ▶证物室：
- *     进入证物室后……
- *     ▶防盗门的钥匙：用来打开谷仓的门
- *
- * 第一行虽然带 ▶，冒号后却什么都没有，底下还挂着真正的条目，
- * 它在原文里就是个小节标题（基准模组里 `证物室` 也确实是一个场景）。
- * 不把 ▶ 剥掉，场景名会变成 "▶证物室"，与基准对不上。
- */
-const TITLE_LINE = /^[▶►▷]?\s*(.{1,12}?)[：:]$/;
-
 const ITEM_LINE = /^[▶►▷]\s*(.*)$/;
 
 /** 把 ▶ 行拆成名字与正文。以第一个冒号为界，正文里的冒号不参与 */
@@ -96,9 +87,28 @@ export function parseSectionItemLine(line: string): { name: string; text: string
 }
 
 export function parseSectionTitleLine(line: string): string | undefined {
-  const titleMatch = line.match(TITLE_LINE);
-  if (!titleMatch || (titleMatch[1] as string).length > TITLE_MAX_LEN) return undefined;
-  return titleMatch[1] as string;
+  return parseExplicitSectionTitleLine(line);
+}
+
+/** Shared by legacy Section.items and source-addressable document blocks. */
+export function isDiscoveryListGuide(line: string): boolean {
+  return DISCOVERY_LIST_ACTION.test(line) && DISCOVERY_LIST_REFERENCE.test(line);
+}
+
+function isDiscoveryItemLabel(name: string): boolean {
+  return name.length <= DISCOVERY_ITEM_LABEL_MAX_LEN
+    && !/[。！？；;，,、：:]/.test(name)
+    && /^[\p{L}\p{N}\s·.'’“”"'（）()\-—]+$/u.test(name);
+}
+
+/** Parse a bare discovery-list entry only after isDiscoveryListGuide has matched. */
+export function parseDiscoveryListItemLine(line: string): { name: string; text: string } | undefined {
+  const index = line.search(/[：:]/);
+  if (index <= 0) return undefined;
+  const name = line.slice(0, index).trim();
+  const text = line.slice(index + 1).trim();
+  if (!name || !text || !isDiscoveryItemLabel(name)) return undefined;
+  return { name, text };
 }
 
 /**
@@ -111,6 +121,7 @@ export function sectionize(pages: string[]): Section[] {
   const out: Section[] = [];
   let cur: Section | null = null;
   const bodyLines: string[] = [];
+  let discoveryListPending = false;
 
   const flush = () => {
     if (!cur) return;
@@ -121,15 +132,20 @@ export function sectionize(pages: string[]): Section[] {
 
   for (let p = 0; p < pages.length; p++) {
     const lines = (pages[p] ?? "").split("\n");
+    const titles = sectionTitleLines(lines);
     for (let i = 0; i < lines.length; i++) {
       const line = (lines[i] ?? "").trim();
-      if (line === "") continue;
+      if (line === "") {
+        discoveryListPending = false;
+        continue;
+      }
       const source: SourceRef = { page: p + 1, line: i + 1 };
 
-      const title = parseSectionTitleLine(line);
+      const title = titles[i];
       if (title !== undefined) {
         flush();
         cur = { title, body: "", items: [], source };
+        discoveryListPending = false;
         continue;
       }
 
@@ -138,13 +154,24 @@ export function sectionize(pages: string[]): Section[] {
         // 条目出现在任何标题之前也要有处安放
         if (!cur) cur = { title: "", body: "", items: [], source };
         cur.items.push({ ...item, source });
+        discoveryListPending = false;
         continue;
+      }
+
+      if (discoveryListPending) {
+        const discoveryItem = parseDiscoveryListItemLine(line);
+        if (discoveryItem) {
+          if (!cur) cur = { title: "", body: "", items: [], source };
+          cur.items.push({ ...discoveryItem, source });
+          continue;
+        }
       }
 
       // 普通正文。首个标题之前的内容归入 title 为空的前置块，不能丢 ——
       // 第 1 页开头的书名就在这儿。
       if (!cur) cur = { title: "", body: "", items: [], source };
       bodyLines.push(line);
+      discoveryListPending = isDiscoveryListGuide(line);
     }
   }
 

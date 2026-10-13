@@ -14,29 +14,25 @@
 
 import { describe, test, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { ORDINARY_COMPANION_FIXTURE, restoreSignedOrdinaryCompanion } from "./helpers/ordinary-companion-fixture";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 512, temperature: 0.7,
 };
 
-type Mgr = {
-  recruit: (cfg: unknown, world: unknown, sceneId?: string) => unknown;
-  getControl: (id: string) => string | null;
-  getAllStates: () => Map<string, { config: { name: string } }>;
-};
+type Mgr = GameSession["companionManager"];
 
 function session(): { s: GameSession; mgr: Mgr; id: string } {
   const s = new GameSession(`ctl-${Math.random()}`, "cosmic-horror", CFG);
-  const inner = s as unknown as { companionManager: Mgr; world: unknown };
+  const id = "ally1";
   // `type` 是必填的 —— recruit 会拿它建世界实体，缺了 SQLite 直接 NOT NULL 报错
-  inner.companionManager.recruit({
-    id: "ally1", name: "老李", type: "npc", archetype: "investigator",
-    behavior: "balanced", hp: 10, maxHp: 10, ac: 10,
-  }, inner.world, "tavern");
-  const id = [...inner.companionManager.getAllStates().entries()]
-    .find(([, c]) => c.config.name === "老李")![0];
-  return { s, mgr: inner.companionManager, id };
+  restoreSignedOrdinaryCompanion(s, CFG, {
+    ...ORDINARY_COMPANION_FIXTURE,
+    id,
+    name: "老李",
+  });
+  return { s, mgr: s.companionManager, id };
 }
 
 describe("接管与放手真的改控制权", () => {

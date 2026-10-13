@@ -143,9 +143,9 @@
               "compileMechanics, validateMechanicsIR, MechanicsCompilationError"
             ],
             [
-              "src/compiler/deterministic-template-compiler.ts / compiler-question-queue.ts / compile-hint-resolution.ts",
-              "文档级 draft、exact-evidence queue 与显式 hints 解析：拓扑多边/零边、多个 ending declaration、分域 discovery binding，解析为 module-scoped accepted interpretations；不读 artifact 或接入运行时",
-              "compileDeterministicTemplates, buildCompilerQuestionQueue, resolveDraftModule"
+              "src/compiler/deterministic-template-compiler.ts / compiler-question-queue.ts / compile-hint-resolution.ts / compiler-hint-proposals.ts",
+              "文档级 draft、exact-evidence queue 与显式/grounded hint 解析：提议端只能看到 source-exact candidate catalog；确定性 identity、domain、citation 与 policy 校验才可把 untrusted proposal 变为 module-scoped accepted interpretation，不读 artifact 或接入运行时",
+              "compileDeterministicTemplates, buildCompilerQuestionQueue, resolveDraftModule, buildCompilerHintProposalRequestEnvelope, compileGroundedHintProposals"
             ],
             [
               "src/compiler/mechanics-reachability.ts",
@@ -153,9 +153,9 @@
               "analyzeMechanicsReachability, replayMechanicsWitness, validateMechanicsAnalysisInput, mechanicsStateHash"
             ],
             [
-              "src/compiler/mechanics-execution.ts / src/diagnostics/compiler-process-simulation.ts / src/api/game-session.ts",
-              "唯一 MechanicsIR 执行核心、diagnostics-only 过程证明与显式动态 GameSession 消费：GameSession 先完整验证 resolved artifact 与 projection，初始自动稳定后以 @compiled 精确 mechanism ID 路由 shared core；MechanicsState 单向镜像到 world-backed scene/visit/clue，legacy loader/CLI 不复用该路径",
-              "executeMechanicsAction, settleAutomaticMechanics, GameSession.loadCompiledModule, compiledMechanicsAction, prepareCompilerProcessSimulation, resolveCompilerProcessSimulation, executeCompilerProcessSimulation"
+              "src/compiler/mechanics-execution.ts / compiler-module-data-projection.ts / src/diagnostics/compiler-process-simulation.ts / src/api/compiler-auto-orchestrator.ts / src/llm/compiled-action-intent.ts / src/api/game-session.ts",
+              "唯一 MechanicsIR 执行核心、diagnostics-only 过程证明与显式动态 GameSession 消费：projection 可保留普通 prose NPC 为静态 narrative_noncombat 锚点；内部 auto orchestrator 有界地编排 grounded proposals，不能替代公开自动编译。GameSession 先完整验证 resolved artifact 与 projection，初始自动稳定后只以 @compiled 精确 mechanism ID 路由 shared core。自然语言 resolver 只读当前 executable allowlist 并绑定 generation，选择后仍须走 structured deterministic transaction；MechanicsState 单向镜像到 world-backed scene/visit/clue，legacy loader/CLI 不复用该路径",
+              "executeMechanicsAction, settleAutomaticMechanics, orchestrateAutoCompiler, resolveCompiledActionIntent, GameSession.loadCompiledModule, compiledMechanicsAction, prepareCompilerProcessSimulation, resolveCompilerProcessSimulation, executeCompilerProcessSimulation"
             ],
             [
               "src/ingest/document-ir.ts / document-blocks.ts",
@@ -540,7 +540,7 @@
           "rows": [
             [
               "src/api/server.ts",
-              "HTTP/WS 入口（Bun.serve）：管理两类会话实例池，暴露 REST 路由，含多 PC 建号（`POST /:id/party`）、按 PC 读历史（`GET /:id/history?pcId=`，缺省仍是当前活动玩家，未知 pcId 走结构化 4xx），编译模组 prepare/resolve/compiled-session 路由，以及 generation 绑定的 player-safe compiled action list/structured execution；structured 与 `@compiled` codec 共用 durable commit/rehydration transaction。",
+              "HTTP/WS 入口（Bun.serve）：管理两类会话实例池，暴露 REST 路由，含多 PC 建号（`POST /:id/party`）、按 PC 读历史（`GET /:id/history?pcId=`，缺省仍是当前活动玩家，未知 pcId 走结构化 4xx），编译模组 prepare/resolve/compiled-session 路由，以及 generation 绑定的 player-safe compiled action list/structured execution；`POST /:id/compiled/intents` 只以当前 allowlist 做自然语言分类且不执行，structured 与 `@compiled` codec 共用 durable commit/rehydration transaction。",
               "（入口，无导出）"
             ],
             [

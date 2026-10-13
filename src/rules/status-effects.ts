@@ -10,6 +10,14 @@ type StatusCategory =
   | "buff"       // 增益
   | "debuff";    // 减益
 
+/**
+ * 由状态定义本身声明的、对行动入口的确定性限制。
+ *
+ * 这里刻意不是按 `name`/`desc` 猜关键词：状态 id 与它的规则语义都只在
+ * STATUS_LIB 维护一次，GameSession 只消费这个查询结果。
+ */
+type StatusActionRestriction = "cannot_act";
+
 interface StatusEffect {
   id: string;
   name: string;
@@ -73,6 +81,21 @@ export function parseStatus(text: string): StatusEffect | null {
 }
 
 /**
+ * 返回当前仍应阻断角色行动的状态；`status: string[]` 仍是唯一存储。
+ *
+ * 调用方应在推进回合前读取它：一回合的昏迷会在该回合结束时到期，但不能
+ * 因为先 tick 再派发意图而从未约束过任何一次行动。
+ */
+export function getActionBlockingStatus(statuses: readonly string[]): StatusEffect | null {
+  for (const raw of statuses) {
+    const status = parseStatus(raw);
+    if (!status || status.duration === 0) continue;
+    if (STATUS_LIB[status.id]?.actionRestriction === "cannot_act") return status;
+  }
+  return null;
+}
+
+/**
  * 把一组状态字符串推进一回合。
  *
  * 返回三样：推进后的字符串、这一回合到期掉的、以及仍在生效的结构化状态
@@ -102,11 +125,29 @@ export function tickStatuses(statuses: readonly string[]): {
 
 // ── 预设状态库 ──────────────────────────────────────
 
-const STATUS_LIB: Record<string, { name: string; desc: string; category: StatusCategory; defaultDuration: number }> = {
+const STATUS_LIB: Record<string, {
+  name: string;
+  desc: string;
+  category: StatusCategory;
+  defaultDuration: number;
+  actionRestriction?: StatusActionRestriction;
+  /** A direct adjustment to an actor's percentile target, never a text-derived guess. */
+  percentileTargetModifier?: number;
+}> = {
   poisoned:      { name: "中毒",   desc: "每回合受到毒属性伤害", category: "physical", defaultDuration: 4 },
   bleeding:      { name: "流血",   desc: "持续损失体力",        category: "physical", defaultDuration: 3 },
+  // 胸部暴击规则只写“每轮额外失去 1d3 HP”，没有自然到期条件；沿既有急救
+  // 的止血语义保持到成功处理伤口，不能擅自伪造普通流血的三回合时限。
+  hemorrhaging:  { name: "大出血", desc: "每回合额外失去 1d3 HP，直到止血", category: "physical", defaultDuration: -1 },
+  // The duration is rolled by CoC combat when this status is written; this
+  // definition owns only its persistent, deterministic action-check meaning.
+  abdominal_impaled: { name: "腹部贯穿", desc: "主动百分检定目标 -20%", category: "physical", defaultDuration: 1, percentileTargetModifier: -20 },
+  // A normal 5+ damage head hit explicitly penalizes only the next action;
+  // no die is declared by that rule, so this fixed one-turn duration is final.
+  head_dazed: { name: "头晕目眩", desc: "下一次主动百分检定目标 -20%", category: "physical", defaultDuration: 1, percentileTargetModifier: -20 },
   burning:       { name: "燃烧",   desc: "被火焰吞噬",          category: "physical", defaultDuration: 2 },
-  stunned:       { name: "昏迷",   desc: "无法行动",            category: "combat",   defaultDuration: 1 },
+  stunned:       { name: "昏迷",   desc: "无法行动",            category: "combat",   defaultDuration: 1, actionRestriction: "cannot_act" },
+  incapacitated: { name: "失能",   desc: "无法行动",            category: "combat",   defaultDuration: 1, actionRestriction: "cannot_act" },
   blinded:       { name: "致盲",   desc: "视线受阻",            category: "debuff",   defaultDuration: 2 },
   frightened:    { name: "恐惧",   desc: "意志检定劣势",        category: "mental",   defaultDuration: 3 },
   charmed:       { name: "魅惑",   desc: "受控于施法者",        category: "mental",   defaultDuration: 3 },
@@ -125,6 +166,26 @@ const STATUS_LIB: Record<string, { name: string; desc: string; category: StatusC
 
 export function getStatusDef(id: string): { name: string; desc: string; category: StatusCategory; defaultDuration: number } | undefined {
   return STATUS_LIB[id];
+}
+
+/**
+ * The one query for status-driven percentile targets. A status string remains
+ * the sole persisted state; malformed labels and expired entries have no rule
+ * effect. The abdomen rule does not say multiple wounds stack, so concurrent
+ * instances use the strongest single penalty rather than inventing -20 per
+ * stack or per duplicate entry.
+ */
+export function getPercentileTargetModifier(statuses: readonly string[]): number {
+  let strongestPenalty = 0;
+  for (const raw of statuses) {
+    const status = parseStatus(raw);
+    if (!status || status.duration === 0) continue;
+    const modifier = STATUS_LIB[status.id]?.percentileTargetModifier;
+    if (typeof modifier === "number" && Number.isFinite(modifier)) {
+      strongestPenalty = Math.min(strongestPenalty, modifier);
+    }
+  }
+  return strongestPenalty;
 }
 
 /**

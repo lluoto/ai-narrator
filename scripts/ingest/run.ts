@@ -28,15 +28,18 @@
 //   bun scripts/ingest/run.ts <模组 PDF 路径>
 //   INGEST_PDF=... bun scripts/ingest/run.ts
 //   INGEST_BASELINE=barn ... 同上，额外对照 BARN_OF_PREMIER 基准（仅这一个模组）
+//   --module-id <id> (or INGEST_MODULE_ID) is required without that baseline.
+//   --title <title> / --out <directory> override INGEST_MODULE_TITLE / INGEST_OUT.
 
-import { readFileSync } from "fs";
+import { mkdirSync, readFileSync } from "fs";
+import { parseIngestRunConfig } from "./cli-config";
 import { loadConfig } from "../../src/config";
 import { LLMClient } from "../../src/llm/client";
 import type { ChatOptions, Message } from "../../src/llm/client";
 import { extractPages } from "../../src/ingest/pdf-source";
 
 import { sourceKey } from "../../src/ingest/sectionize";
-import { prepareSections, classifyAndBuild } from "../../src/ingest/pipeline";
+import { prepareSections, classifyAndBuild, requiredIngestFailure } from "../../src/ingest/pipeline";
 import { assembleModule } from "../../src/ingest/assemble-module";
 import { buildNarrative, applyNarrative, findMissingCreativeSourceRef, findRegisteredCreativeLayer } from "../../src/ingest/build-narrative";
 import { readOriginalCorpus, buildCorpusFromPages, compareCorpusSources } from "../../src/ingest/three-way-audit";
@@ -52,19 +55,20 @@ import { ENTRY_SCORING_KEY } from "../../src/ingest/scoring-key";
 
 // 硬编码绝对路径 = 只有作者那台机器能跑。缺参数就说清楚要什么，别拿一条
 // ENOENT 让人猜。
-const PDF = process.argv[2] ?? process.env.INGEST_PDF ?? "";
-if (!PDF) {
-  console.error("用法：bun scripts/ingest/run.ts <模组 PDF 路径>（或设 INGEST_PDF）");
+const parsedConfig = parseIngestRunConfig(process.argv.slice(2), process.env);
+if (!parsedConfig.ok) {
+  console.error(parsedConfig.message);
   process.exit(2);
 }
+const PDF = parsedConfig.config.pdfPath;
 // 产物落 analysis/（已 gitignore），与其余诊断产物同一个去处；tools/ 不再参与。
-const OUT = "analysis/ingest";
+const OUT = parsedConfig.config.outputDir;
 
 // 本仓目前只有这一份手写基准（普瑞米尔的谷仓），显式选择才对照它——
 // 不是"默认假设当前 PDF 就是它"。跑别的 PDF 时不传这个变量，
 // 走无基准路径，report 里每一节都会说清楚"没有基准可对照"。
 const baselineData: BaselineData | undefined =
-  process.env.INGEST_BASELINE === "barn"
+  parsedConfig.config.baseline === "barn"
     ? { module: BARN_OF_PREMIER, scoringKey: ENTRY_SCORING_KEY }
     : undefined;
 
@@ -147,6 +151,7 @@ const {
   scenes: rawScenes,
   sceneWarnings,
   itemInputs,
+  itemKindsFirstPass,
   itemKinds,
   itemIds,
   items: rawItems,
@@ -161,6 +166,24 @@ const {
     client.label = label;
   },
 });
+
+const requiredFailure = requiredIngestFailure({
+  classifyInputs: inputs,
+  kinds,
+  scenes: rawScenes,
+  itemInputs,
+  itemKindsFirstPass,
+});
+if (requiredFailure) {
+  console.error(
+    `[ingest] required ${requiredFailure.stage} cannot publish a module: ${requiredFailure.kind}`,
+  );
+  process.exit(1);
+}
+
+// The publish gate above must run before this creates an output directory or
+// any artifact file. Failed required stages retain only in-memory diagnostics.
+mkdirSync(OUT, { recursive: true });
 
 /**
  * 有基准：对基准算覆盖率/精确率/id 继承/calibrate diff，`scenes`/`items`
@@ -211,7 +234,7 @@ await Bun.write(`${OUT}/provenance.json`, JSON.stringify(provenance, null, 2));
 // 装配成一个完整 ModuleData 并落盘。
 const assembled = assembleModule(
   { sections, kinds, scenes, items, provenance, endings },
-  { id: "barn-of-premier-ingested", title: "普瑞米尔的谷仓（摄取）" },
+  { id: parsedConfig.config.moduleId, title: parsedConfig.config.moduleTitle },
 );
 
 // ── 创作层（todo-52，第一版：openingAtmosphere/prologue/partySetup）──

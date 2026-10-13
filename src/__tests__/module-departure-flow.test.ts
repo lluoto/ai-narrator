@@ -12,6 +12,15 @@ function makeSession(): GameSession {
   process.env.OPENAI_API_KEY = "";
   return new GameSession("departure-test", "cosmic-horror", {
     apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 1024, temperature: 0.7,
+  }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
+}
+
+void legacyMakeSession;
+function legacyMakeSession(): GameSession {
+  process.env.LLM_API_KEY = "";
+  process.env.OPENAI_API_KEY = "";
+  return new GameSession("departure-test", "cosmic-horror", {
+    apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 1024, temperature: 0.7,
   }, undefined, "调查员");
 }
 
@@ -73,7 +82,8 @@ describe("确认门：显式离开 → 确认 → 进结局；不确认 → 留�
   it("确认后进入结局：会话置为终态（复用 dead，不造第三种终态）", async () => {
     await session.act("我们决定离开这里，结束这次调查");
     const res = await session.act("确定");
-    expect(session.dead).toBe(true);
+    expect(session.dead).toBe(false);
+    expect(res).toMatchObject({ dead: false, terminal: { kind: "module_departure" } });
     expect(res.narrative.length).toBeGreaterThan(0);
   });
 
@@ -113,7 +123,8 @@ describe("确认离开后：谷仓早退 → Normal End 正文", () => {
     await session.act("加载模组 普瑞米尔的谷仓");
     await session.act("我们决定离开这里，结束这次调查");
     const res = await session.act("确定");
-    expect(session.dead).toBe(true);
+    expect(session.dead).toBe(false);
+    expect(res).toMatchObject({ dead: false, terminal: { kind: "module_departure" } });
     // Normal End 的文案来自 END_NARRATIONS，不是空播——narrative 有内容。
     expect(res.narrative.trim().length).toBeGreaterThan(0);
     expect(res.events.length).toBeGreaterThan(0);
@@ -148,13 +159,24 @@ describe("确认离开后：Good End 与 Normal End 判别——按状态选，�
   it("发现 clue_control_supplies 且未发现 clue_bedroom_old_doc → Good End", async () => {
     const session = makeSession();
     await session.act("加载模组 普瑞米尔的谷仓");
-    session.investigation.markDiscovered("clue_control_supplies", "p1");
+    // Reach the declared clue through the installed module rather than
+    // fabricating it through GameSession's read-only world observation.
+    expect((await session.act("前往 中控室")).error).toBeUndefined();
+    const realRandom = Math.random;
+    Math.random = () => 0;
+    try {
+      expect((await session.act("打开冰箱与储物柜")).error).toBeUndefined();
+    } finally {
+      Math.random = realRandom;
+    }
+    expect(session.investigation.isDiscoveredBy("clue_control_supplies", "p1")).toBe(true);
     // 未发现 clue_bedroom_old_doc（Good End 的 excludeClues）——不做任何事即可。
 
     await session.act("我们决定离开这里，结束这次调查");
     const res = await session.act("确定");
 
-    expect(session.dead).toBe(true);
+    expect(session.dead).toBe(false);
+    expect(res).toMatchObject({ dead: false, terminal: { kind: "module_departure" } });
     expect(res.narrative).toBe(goodNarration.lines.join("\n"));
     // 判别的核心：Good End 与 Normal End 正文必须不同，否则测不出"按状态选"。
     expect(res.narrative).not.toBe(normalNarration.lines.join("\n"));
@@ -173,7 +195,8 @@ describe("确认离开后：无 endings 数据的模组走通用收场，不报�
     await session.act("加载模组 阿卡姆档案检查");
     await session.act("我们决定离开这里，结束这次调查");
     const res = await session.act("确定");
-    expect(session.dead).toBe(true);
+    expect(session.dead).toBe(false);
+    expect(res).toMatchObject({ dead: false, terminal: { kind: "module_departure" } });
     expect(res.narrative.trim().length).toBeGreaterThan(0);
     expect(res.events.length).toBeGreaterThan(0);
   });
@@ -194,7 +217,8 @@ describe("确认离开后：无 endings 数据的模组走通用收场，不报�
         await session.act("加载模组 阿卡姆档案检查");
         await session.act("我们决定离开这里，结束这次调查");
         const res = await session.act("确定");
-        expect(session.dead).toBe(true);
+        expect(session.dead).toBe(false);
+        expect(res).toMatchObject({ dead: false, terminal: { kind: "module_departure" } });
         const gotFakeEnding = res.events.some((e) => e.content.includes("测试用假结局"));
         expect(gotFakeEnding).toBe(true);
       } finally {

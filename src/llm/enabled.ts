@@ -10,9 +10,21 @@
  * `play-module → player-agent → play-module` 成环，preflight 的 import 判据会拦。
  * 这里只依赖 process.env，无下层依赖，两处 import 都安全。
  */
+export function isUsableLlmApiKey(apiKey: string | null | undefined): apiKey is string {
+  const normalized = apiKey?.trim();
+  return !!normalized
+    && !normalized.startsWith("sk-placeholder")
+    && normalized !== "sk-your-key-here"
+    && !normalized.startsWith("${");
+}
+
 export function llmEnabled(): boolean {
-  if (process.env.LLM_DISABLED === "true" || process.env.LLM_MODE === "template") return false;
-  const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey || apiKey === "sk-placeholder" || apiKey.startsWith("${")) return false;
-  return true;
+  if (llmDisabledByOverride()) return false;
+  const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY;
+  return isUsableLlmApiKey(apiKey);
+}
+
+/** Explicit offline switches apply even to an otherwise valid session-owned config. */
+export function llmDisabledByOverride(): boolean {
+  return process.env.LLM_DISABLED === "true" || process.env.LLM_MODE === "template";
 }

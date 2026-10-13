@@ -7,6 +7,7 @@ import {
   Currency, CurrencyType, Bank, Loan, FinancialCrisis, FinancialCrisisType,
   EconomyEvent, EconomyEventType
 } from "./types";
+import type { FinanceSystemSnapshot } from "./politico-economy-snapshot";
 
 export class FinanceSystem {
   currencies: Map<string, Currency> = new Map();
@@ -119,6 +120,30 @@ export class FinanceSystem {
   // 获取所有银行 / Get all banks
   getAllBanks(): Bank[] {
     return Array.from(this.banks.values());
+  }
+
+  /** Internal persistence primitive. Untrusted snapshots are validated by the engine. */
+  exportForSnapshot(): FinanceSystemSnapshot {
+    return {
+      currencies: Array.from(this.currencies.values()),
+      banks: Array.from(this.banks.values()),
+      activeCrises: this.activeCrises,
+      events: this.events,
+      round: this.round,
+      crisisCounter: this.crisisCounter,
+      eventCounter: this.eventCounter,
+    };
+  }
+
+  /** Internal persistence primitive. Call only with validatePoliticoEconomySnapshot output. */
+  replaceFromSnapshot(snapshot: FinanceSystemSnapshot): void {
+    this.currencies = new Map(snapshot.currencies.map(currency => [currency.id, currency]));
+    this.banks = new Map(snapshot.banks.map(bank => [bank.id, bank]));
+    this.activeCrises = snapshot.activeCrises;
+    this.events = snapshot.events;
+    this.round = snapshot.round;
+    this.crisisCounter = snapshot.crisisCounter;
+    this.eventCounter = snapshot.eventCounter;
   }
 
   // 存款 / Deposit currency into a bank

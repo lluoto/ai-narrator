@@ -22,7 +22,7 @@
 // 为了让自家注释过关去钝化它，方向就反了。）
 import type { LLMClient } from "../llm/client";
 import { buildDocumentIR } from "./pdf-source";
-import { cleanPageText, cleanPageWithTrace, joinPages, joinPagesWithTrace } from "./clean-text";
+import { cleanPages, cleanPagesWithTrace, joinPages, joinPagesWithTrace } from "./clean-text";
 import { buildDocumentBlocks } from "./document-blocks";
 import { createSyntheticDocumentIR, type DocumentBlock, type DocumentIR } from "./document-ir";
 import { buildSourceFactGraph, type SourceFactGraph } from "../compiler/source-fact-graph";
@@ -91,6 +91,30 @@ export interface IngestResult {
 }
 
 /**
+ * Ingest may retain intermediate diagnostics after a model call fails, but the
+ * CLI must not publish a module when a required classification stage has no
+ * usable result. Partial classifications remain usable; an empty required
+ * stage, or no resulting scene at all, does not.
+ */
+export type RequiredIngestFailure =
+  | { stage: "section-classification"; kind: "no-classifications" | "no-scenes" }
+  | { stage: "item-classification"; kind: "no-classifications" };
+
+/** Pure publish gate for the CLI; it never infers failure from logs or clients. */
+export function requiredIngestFailure(
+  result: Pick<IngestResult, "classifyInputs" | "kinds" | "scenes" | "itemInputs" | "itemKindsFirstPass">,
+): RequiredIngestFailure | undefined {
+  if (result.classifyInputs.length > 0) {
+    if (result.kinds.size === 0) return { stage: "section-classification", kind: "no-classifications" };
+  }
+  if (result.scenes.length === 0) return { stage: "section-classification", kind: "no-scenes" };
+  if (result.itemInputs.length > 0 && result.itemKindsFirstPass.size === 0) {
+    return { stage: "item-classification", kind: "no-classifications" };
+  }
+  return undefined;
+}
+
+/**
  * 调用方可以在每次 LLM 调用前收到一个标签，用来给录制分组。
  *
  * 不在这里直接依赖 RecordingClient：那是度量侧的东西，
@@ -139,7 +163,7 @@ async function runIngestFromDocumentIR(
 ): Promise<IngestResult> {
   const rawPages = documentIR.pages.map((page) => page.rawText);
   const sections = prepareSections(rawPages);
-  const tracedPages = joinPagesWithTrace(documentIR.pages.map(cleanPageWithTrace));
+  const tracedPages = joinPagesWithTrace(cleanPagesWithTrace(documentIR.pages));
   const documentBlocks = buildDocumentBlocks(documentIR, tracedPages);
   const sourceFactGraph = buildSourceFactGraph(documentIR, documentBlocks);
   return classifyAndBuild(sections, client, hooks, documentIR, documentBlocks, sourceFactGraph);
@@ -154,12 +178,14 @@ async function runIngestFromDocumentIR(
  * 合成一步的话，要么这检查挪到花完钱之后，要么调用方自己再切一遍 ——
  * 而自己再切一遍，就等于把编排又抄回去了。
  *
- * 顺序不能换：`cleanPageText` 逐页清洗在前，`joinPages` 接跨页断句在后。
- * 反过来的话，正好断在页末的句子永远接不回来 —— 实测 4 处，
+ * 顺序不能换：`cleanPages` 先看整份 raw pages，为跨页结构行标记连续性后再逐页清洗；
+ * `joinPages` 才接普通的跨页断句。退回 `rawPages.map(cleanPageText)` 会让 2+1
+ * 的结构行在页内先被焊死，之后已经无法恢复。反过来的话，正好断在页末的句子也
+ * 永远接不回来 —— 实测 4 处，
  * 其中一处是 ▶防盗门的钥匙 的「不多见。」落到了下一页开头。
  */
 export function prepareSections(rawPages: string[]): Section[] {
-  return sectionize(joinPages(rawPages.map(cleanPageText)));
+  return sectionize(joinPages(cleanPages(rawPages)));
 }
 
 /**
@@ -218,7 +244,7 @@ export async function classifyAndBuild(
   const { items, provenance, warnings: itemWarnings } = buildItems(itemInputs, itemKinds, itemIds);
 
   // 线索复用条目分类/追问/编号的同一份产出（itemInputs/itemKinds/itemIds）——
-  // "这一条 ▶ 是不是线索"与"是不是物品"是同一次分类回答的，不是两遍问题。
+  // "这一条结构化条目是不是线索"与"是不是物品"是同一次分类回答的，不是两遍问题。
   // 必须在 buildItems 之后没有先后依赖，只是编排上顺着同一批中间量往下写。
   stage("建线索");
   const { scenes: scenesWithClues, clueCount, provenance: clueProvenance, warnings: clueWarnings } =

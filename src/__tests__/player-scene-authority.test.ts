@@ -18,9 +18,10 @@ const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 512, temperature: 0.7,
 };
+const TRANSIENT_RUNTIME = { careerEntryPersistence: "transient" } as const;
 
 async function twoPcArena() {
-  const session: any = new GameSession(`scene-auth-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员");
+  const session: any = new GameSession(`scene-auth-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员", undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME);
   await session.act("创建角色 investigator 甲"); // p1
   await session.act("创建队友 乙 investigator"); // p2
   await session.act("加载模组 普瑞米尔的谷仓");

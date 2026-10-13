@@ -10,10 +10,11 @@
 //
 // bun test src/__tests__/progress-state-truth-source.test.ts
 
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { GameSession } from "../api/game-session";
 import { InvestigationEngine } from "../investigation/investigation-engine";
 import { WorldStateManager } from "../state/world-state-manager";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const LLM = {
   apiKey: "sk-placeholder",
@@ -35,24 +36,40 @@ beforeEach(() => {
   session = makeSession();
 });
 
+afterEach(() => {
+  session.close();
+});
+
+async function discoverBarnClue(clue: "clue_card" | "clue_control_supplies"): Promise<void> {
+  expect((await session.act("加载模组 普瑞米尔的谷仓")).error).toBeUndefined();
+  activateRegisteredGameSessionSceneForTest(session, clue === "clue_card" ? "加比的拖车房" : "中控室");
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    expect((await session.act(clue === "clue_card" ? "检查餐厅" : "打开冰箱与储物柜")).error).toBeUndefined();
+  } finally {
+    Math.random = originalRandom;
+  }
+  expect(session.world.isClueDiscoveredBy("p1", clue)).toBe(true);
+}
+
 describe("线索发现 · 真相只在真相源一处", () => {
-  it("markDiscovered 写入可从 session.world 读回（不是引擎自己的 Map）", () => {
-    session.investigation.markDiscovered("clue_test", "p1");
-    expect(session.world.isClueDiscoveredBy("p1", "clue_test")).toBe(true);
-    expect(session.investigation.isDiscoveredBy("clue_test", "p1")).toBe(true);
+  it("生产发现写入可从 session.world 读回（不是引擎自己的 Map）", async () => {
+    await discoverBarnClue("clue_card");
+    expect(session.investigation.isDiscoveredBy("clue_card", "p1")).toBe(true);
   });
 
-  it("按玩家粒度隔离：p1 的发现不会让 p2 也算发现了", () => {
-    session.investigation.markDiscovered("clue_test", "p1");
-    expect(session.world.isClueDiscoveredBy("p2", "clue_test")).toBe(false);
-    expect(session.investigation.isDiscoveredBy("clue_test", "p2")).toBe(false);
+  it("按玩家粒度隔离：p1 的发现不会让 p2 也算发现了", async () => {
+    await discoverBarnClue("clue_card");
+    expect(session.world.isClueDiscoveredBy("p2", "clue_card")).toBe(false);
+    expect(session.investigation.isDiscoveredBy("clue_card", "p2")).toBe(false);
   });
 
-  it("getDiscoveredBy 汇总某玩家全部发现，来自真相源", () => {
-    session.investigation.markDiscovered("clue_a", "p1");
-    session.investigation.markDiscovered("clue_b", "p1");
-    expect(session.world.getCluesDiscoveredBy("p1").sort()).toEqual(["clue_a", "clue_b"]);
-    expect(session.investigation.getDiscoveredBy("p1").sort()).toEqual(["clue_a", "clue_b"]);
+  it("getDiscoveredBy 汇总某玩家全部发现，来自真相源", async () => {
+    await discoverBarnClue("clue_card");
+    await discoverBarnClue("clue_control_supplies");
+    expect(session.world.getCluesDiscoveredBy("p1").sort()).toEqual(["clue_card", "clue_control_supplies"]);
+    expect([...session.investigation.getDiscoveredBy("p1")].sort()).toEqual(["clue_card", "clue_control_supplies"]);
   });
 
   it(
@@ -80,23 +97,19 @@ describe("线索发现 · 真相只在真相源一处", () => {
 
 describe("场景访问历史 · 真相只在真相源一处（GameSession 侧此前完全没有）", () => {
   it("movePlayerToScene 记一次访问，可从真相源读回", async () => {
-    session.world.registerScene("scene_a", "场景A", "");
-    (session as any).movePlayerToScene("scene_a");
+    expect((await session.act("去 scene_a")).error).toBeUndefined();
     expect(session.world.isSceneVisitedBy("p1", "scene_a")).toBe(true);
   });
 
-  it("按玩家粒度可查：p1 去过的地方不会让 p2 也算去过", () => {
-    session.world.registerScene("scene_a", "场景A", "");
-    (session as any).movePlayerToScene("scene_a");
+  it("按玩家粒度可查：p1 去过的地方不会让 p2 也算去过", async () => {
+    expect((await session.act("去 scene_a")).error).toBeUndefined();
     expect(session.world.isSceneVisitedBy("p2", "scene_a")).toBe(false);
   });
 
-  it("getScenesVisitedBy 汇总累计历史；来回走同一场景，历史不丢也不重复", () => {
-    session.world.registerScene("scene_a", "场景A", "");
-    session.world.registerScene("scene_b", "场景B", "");
-    (session as any).movePlayerToScene("scene_a");
-    (session as any).movePlayerToScene("scene_b");
-    (session as any).movePlayerToScene("scene_a"); // 回头
+  it("getScenesVisitedBy 汇总累计历史；来回走同一场景，历史不丢也不重复", async () => {
+    expect((await session.act("去 scene_a")).error).toBeUndefined();
+    expect((await session.act("去 scene_b")).error).toBeUndefined();
+    expect((await session.act("去 scene_a")).error).toBeUndefined(); // 回头
     expect(session.world.getScenesVisitedBy("p1").sort()).toEqual(["scene_a", "scene_b"]);
   });
 

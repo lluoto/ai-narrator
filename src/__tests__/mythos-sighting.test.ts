@@ -8,29 +8,62 @@
 //   · 目击即掷，不必等到战斗（挂在攻击流程上就太晚了）
 //   · 同一种生物只在首次目击时掷，重复遭遇不再扣
 
-import { describe, test, expect } from "bun:test";
+import { afterEach, describe, test, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 64, temperature: 0,
 };
+const TRANSIENT_RUNTIME = { careerEntryPersistence: "transient" } as const;
 
-type W = { upsertEntity: (e: unknown) => void; getCurrentState: () => { scene: string } };
-type S = { world: W; sanity: { state: { currentSAN: number } } };
+type S = { sanity: { state: { currentSAN: number } } };
+
+const sessions: GameSession[] = [];
+afterEach(() => {
+  while (sessions.length) sessions.pop()!.close();
+});
 
 async function sessionWith(names: string[], opts: { hp?: number; elsewhere?: boolean } = {}) {
-  const s = new GameSession(`sg-${Math.random()}`, "cosmic-horror", CFG);
-  await s.act("创建角色 investigator 甲");
-  const a = s as unknown as S;
-  const scene = a.world.getCurrentState().scene;
-  names.forEach((n, i) => {
-    a.world.upsertEntity({
-      id: `m${i}`, name: n, type: "monster",
-      hp: opts.hp ?? 30, maxHp: 30, ac: 0, status: [],
-      position: opts.elsewhere ? "某个别的地方" : scene,
+  const source = new GameSession(
+    `sg-${Math.random()}`,
+    "cosmic-horror",
+    CFG,
+    "investigator",
+    "甲",
+    undefined,
+    undefined,
+    undefined,
+    "preferred",
+    TRANSIENT_RUNTIME,
+  );
+  const s = new GameSession(
+    source.id,
+    "cosmic-horror",
+    CFG,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "preferred",
+    TRANSIENT_RUNTIME,
+  );
+  try {
+    restoreSignedOrdinaryWorld(s, CFG, (world) => {
+      const scene = world.getCurrentState().scene;
+      names.forEach((name, index) => world.upsertEntity({
+        id: `m${index}`, name, type: "monster",
+        hp: opts.hp ?? 30, maxHp: 30, ac: 0, status: [],
+        position: opts.elsewhere ? "某个别的地方" : scene,
+      }));
     });
-  });
+  } finally {
+    source.close();
+  }
+  sessions.push(s);
+  const a = s as unknown as S;
   return { s, a };
 }
 

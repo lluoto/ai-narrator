@@ -18,11 +18,15 @@ const LLM = {
   maxTokens: 1024,
   temperature: 0.7,
 };
+const TRANSIENT_RUNTIME = { careerEntryPersistence: "transient" } as const;
 
-function makeSession(archetypeId?: string): GameSession {
+function makeSession(archetypeId?: string, characterRandomUnit?: () => number): GameSession {
   process.env.LLM_API_KEY = "";
   process.env.OPENAI_API_KEY = "";
-  return new GameSession("truth-source-session", "cosmic-horror", LLM, archetypeId, "调查员");
+  return new GameSession("truth-source-session", "cosmic-horror", LLM, archetypeId, "调查员", undefined, undefined, undefined, "preferred", {
+    ...TRANSIENT_RUNTIME,
+    ...(characterRandomUnit ? { characterRandomUnit } : {}),
+  });
 }
 
 let session: GameSession;
@@ -91,13 +95,18 @@ describe("阶段1 · 读取面与真相源一致", () => {
   let s: GameSession;
 
   beforeEach(() => {
-    s = makeSession("investigator");
+    // This is a successful-write fixture, not a random SAN-domain test.
+    s = makeSession("investigator", () => 0.25);
   });
 
   it("KP 面板读到的背包/武器/SAN 来自真相源", () => {
+    expect(s.activeCharacter.attributes.power).toBe(61);
+    expect(s.world.getPlayerSanity("p1")?.maxSAN).toBe(61);
     s.setPlayerInventory("p1", ["撬棍"]);
     s.setPlayerWeapons("p1", ["猎刀"]);
-    s.setPlayerSan("p1", 44);
+    expect(s.setPlayerSan("p1", 44).ok).toBe(true);
+    expect(s.sanity.state.currentSAN).toBe(44);
+    expect(s.world.getPlayerSanity("p1")?.currentSAN).toBe(44);
 
     const kp = s.getKPState();
     const p1 = kp.characters.find((c: { playerId: string }) => c.playerId === "p1");
@@ -105,6 +114,35 @@ describe("阶段1 · 读取面与真相源一致", () => {
     expect(p1.inventory).toEqual(["撬棍"]);
     expect(p1.weapons).toEqual(["猎刀"]);
     expect(p1.san).toBe(44);
+  });
+
+  it("低 POW 的 SAN 越界写入被拒绝，所有读取面与真相源保持不变", () => {
+    let entropyState = 722;
+    const low = makeSession("investigator", () => {
+      entropyState = (Math.imul(entropyState, 1664525) + 1013904223) >>> 0;
+      return entropyState / 0x1_0000_0000;
+    });
+    try {
+      expect(low.activeCharacter.attributes.power).toBe(43);
+      const priorSanity = structuredClone(low.sanity.state);
+      const priorWorld = low.world.getCurrentState();
+      expect(priorSanity.currentSAN).toBe(43);
+      expect(priorSanity.maxSAN).toBe(43);
+      expect(low.setPlayerSan("p1", 44)).toEqual({
+        ok: false,
+        error: {
+          code: "value_out_of_domain", variable: "san:p1", to: 44,
+          domain: { kind: "integer", min: 0, max: 43 },
+        },
+      });
+      expect(low.sanity.state).toEqual(priorSanity);
+      expect(low.world.getCurrentState()).toEqual(priorWorld);
+      const p1 = low.getKPState().characters.find((c: { playerId: string }) => c.playerId === "p1");
+      expect(p1.san).toBe(43);
+      expect(p1.maxSan).toBe(43);
+    } finally {
+      low.close();
+    }
   });
 
   it("新加入的队友状态同样落到真相源", async () => {

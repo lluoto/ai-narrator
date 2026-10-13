@@ -1,16 +1,15 @@
 # ============================================================
-# AI TRPG — 多阶段 Docker 构建
+# AI Narrator — 多阶段 Docker 构建
 # ============================================================
-#
-# 构建前需要先把世界模型放进 assets/（229MB，在仓库之外，见 docs/deploy.md）：
-#   mkdir assets
-#   cp ../世界模型/v18_output/v18_all_master.jsonl assets/
-#   cp ../世界模型/cthulhu_extracted/cthulhu_world_model.jsonl assets/
-#
-# Docker 的构建上下文取不到项目目录之外的文件，所以只能先搬进来。
+# External world-model data is intentionally excluded from the build context.
+# The optional Compose override supplies reviewed host data only through
+# explicit read-only runtime mounts; a clean clone needs no assets/ directory.
+
+# ── Shared toolchain version ──
+ARG BUN_VERSION=1.3.14
 
 # ── Stage 1: 构建前端 ──
-FROM oven/bun:1.2 AS frontend-build
+FROM oven/bun:${BUN_VERSION} AS frontend-build
 
 WORKDIR /app/frontend
 # 锁文件统一成 bun.lock（根目录一直如此，frontend 以前跟踪的是 npm 的
@@ -23,18 +22,14 @@ COPY frontend/ .
 RUN bun run build
 
 # ── Stage 2: 运行后端 ──
-FROM oven/bun:1.2-slim
+FROM oven/bun:${BUN_VERSION}-slim
 
 WORKDIR /app
 
-COPY package.json bun.lock* ./
-RUN bun install --production || bun install
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production
 
 COPY src/ ./src/
-
-# 世界模型。缺失时程序只 warn 不崩，但 KP 上下文、幻觉风险评分、
-# 规则映射都会失效，等于少了一大半判断依据。
-COPY assets/ ./assets/
 
 # 前端构建产物 —— 由后端在同一端口托管，见 src/api/server.ts 的 serveStatic
 COPY --from=frontend-build /app/frontend/dist/ ./frontend/dist/
@@ -45,9 +40,16 @@ ENV FRONTEND_DIR=/app/frontend/dist
 ENV WORLD_MODEL_PATH=/app/assets/v18_all_master.jsonl
 ENV CTHULHU_MODEL_PATH=/app/assets/cthulhu_world_model.jsonl
 
-# 会话存档与模组 JSON 落在这里；data/ 不入镜像，由卷提供
+# Only durable session data is writable by the runtime user. World-model input
+# is supplied through explicit read-only runtime bind mounts, never image COPY.
+RUN mkdir -p /app/data /app/assets /app/world-model-policy /app/cthulhu-dataset && chown bun:bun /app/data && chmod 0555 /app/assets /app/world-model-policy /app/cthulhu-dataset
+
 VOLUME [ "/app/data" ]
 
+USER bun
+
 EXPOSE 3099
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["bun", "src/api/container-healthcheck.ts"]
 
 CMD ["bun", "src/api/server.ts"]

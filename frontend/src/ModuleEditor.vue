@@ -1,5 +1,6 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { ownerFetch } from './owner-auth.js'
 
 const emit = defineEmits(['close'])
 const modules = ref([])
@@ -13,8 +14,12 @@ const BASE = '/api'
 async function loadModules() {
   loading.value = true
   try {
-    const res = await fetch(`${BASE}/modules`)
+    const res = await ownerFetch(`${BASE}/modules`)
+    if (!res.ok) throw new Error('Unable to load modules')
     modules.value = (await res.json()).modules || []
+  } catch {
+    modules.value = []
+    msg.value = '✗ Unable to load modules'
   } finally { loading.value = false }
 }
 
@@ -29,24 +34,30 @@ function newModule() {
   })
 }
 
-function editModule(mod) {
-  fetch(`${BASE}/modules/${mod.id}`).then(r => r.json()).then(data => {
+async function editModule(mod) {
+  msg.value = ''
+  try {
+    const res = await ownerFetch(`${BASE}/modules/${mod.id}`)
+    if (!res.ok) throw new Error('Unable to load module')
+    const data = await res.json()
     editing.value = reactive(data.module)
-  })
+  } catch {
+    msg.value = '✗ Unable to load module'
+  }
 }
 
 async function saveModule() {
   saving.value = true; msg.value = ''
   try {
-    const res = await fetch(`${BASE}/modules`, {
+    const res = await ownerFetch(`${BASE}/modules`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(editing.value),
     })
-    if (!res.ok) throw new Error((await res.json()).error || '保存失败')
+    if (!res.ok) throw new Error('Unable to save module')
     msg.value = '✓ 保存成功'
     editing.value = null
     loadModules()
-  } catch (e) { msg.value = `✗ ${e.message}` }
+  } catch { msg.value = '✗ Unable to save module' }
   finally { saving.value = false }
 }
 
@@ -64,8 +75,13 @@ function removeClue(i) { editing.value.clues.splice(i, 1) }
 
 async function deleteModule(id) {
   if (!confirm('确认删除？')) return
-  await fetch(`${BASE}/modules/${id}`, { method: 'DELETE' })
-  loadModules()
+  try {
+    const res = await ownerFetch(`${BASE}/modules/${id}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error('Unable to delete module')
+    await loadModules()
+  } catch {
+    msg.value = '✗ Unable to delete module'
+  }
 }
 </script>
 

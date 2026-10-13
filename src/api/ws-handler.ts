@@ -2,7 +2,12 @@
 // WebSocket 推送 — 实时广播给前端（多PC/KP）
 // ============================================================
 
+import { Buffer } from "buffer";
 import type { ServerWebSocket } from "bun";
+import {
+  OrdinarySessionWebSocketAdmissionController,
+  readOrdinarySessionWebSocketAdmission,
+} from "./ordinary-session-websocket-admission";
 
 /** 连接角色 */
 export type WsRole = "kp" | "player" | "observer";
@@ -24,6 +29,65 @@ export interface WsConnectionData {
   playerId?: string;
 }
 
+/**
+ * This endpoint only accepts an optional ping, so its resource boundary stays
+ * deliberately small. Bun applies this limit on wire traffic; the message
+ * handler repeats it because direct handler callers are not protected by Bun.
+ */
+export const ORDINARY_SESSION_WEBSOCKET_MAX_PAYLOAD_LENGTH = 1024;
+export const ORDINARY_SESSION_WEBSOCKET_BACKPRESSURE_LIMIT = 256 * 1024;
+
+type WsLifecycleHooks = Pick<Bun.WebSocketHandler<WsConnectionData>, "open" | "close">;
+
+function incomingMessageByteLength(message: string | Buffer<ArrayBuffer>): number {
+  return typeof message === "string" ? Buffer.byteLength(message, "utf8") : message.byteLength;
+}
+
+function decodeBinaryUtf8(message: Buffer<ArrayBuffer>): string | undefined {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(message);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The production `/ws` handler accepts only a compatibility ping. Binary
+ * frames retain the prior UTF-8 JSON compatibility but malformed bytes have no
+ * effect; no binary frame is coerced with `toString()`.
+ */
+export function createOrdinarySessionWebSocketHandler(lifecycle: WsLifecycleHooks) {
+  return {
+    ...lifecycle,
+    maxPayloadLength: ORDINARY_SESSION_WEBSOCKET_MAX_PAYLOAD_LENGTH,
+    backpressureLimit: ORDINARY_SESSION_WEBSOCKET_BACKPRESSURE_LIMIT,
+    closeOnBackpressureLimit: true,
+    message(ws: ServerWebSocket<WsConnectionData>, message: string | Buffer<ArrayBuffer>): void {
+      if (incomingMessageByteLength(message) > ORDINARY_SESSION_WEBSOCKET_MAX_PAYLOAD_LENGTH) {
+        ws.close(1009, "Message too big");
+        return;
+      }
+
+      const text = typeof message === "string" ? message : decodeBinaryUtf8(message);
+      if (text === undefined) return;
+
+      try {
+        const parsed: unknown = JSON.parse(text);
+        if (
+          typeof parsed === "object"
+          && parsed !== null
+          && !Array.isArray(parsed)
+          && (parsed as { type?: unknown }).type === "ping"
+        ) {
+          ws.send(JSON.stringify({ type: "pong" }));
+        }
+      } catch {
+        // The protocol intentionally ignores malformed and unknown messages.
+      }
+    },
+  };
+}
+
 interface WsClient {
   ws: ServerWebSocket<WsConnectionData>;
   sessionId: string;
@@ -33,6 +97,10 @@ interface WsClient {
 }
 
 const clients = new Map<number, WsClient>();
+// A lease is owned only by the socket whose open callback successfully
+// activated it. Failed/replayed callbacks may still get close events, but they
+// must not release another socket's active allocation.
+const admittedClients = new WeakSet<ServerWebSocket<WsConnectionData>>();
 
 let nextId = 1;
 
@@ -56,6 +124,51 @@ export function createWsClient(
 export function removeWsClient(ws: ServerWebSocket<WsConnectionData>): void {
   for (const [id, c] of clients) {
     if (c.ws === ws) { clients.delete(id); break; }
+  }
+}
+
+/**
+ * Main's only production open path.  It validates the one-use server-side
+ * lease before adding this socket to the broadcast registry.
+ */
+export function openAdmittedOrdinarySessionWebSocket(
+  ws: ServerWebSocket<WsConnectionData>,
+  admission: OrdinarySessionWebSocketAdmissionController,
+): boolean {
+  const bound = readOrdinarySessionWebSocketAdmission(ws.data);
+  if (!bound || !admission.activateReservedLease(bound.lease, bound.binding)) {
+    ws.close(1013, "WebSocket admission unavailable");
+    return false;
+  }
+  const { sessionId, role, playerId } = ws.data;
+  createWsClient(ws, sessionId, role, playerId);
+  admittedClients.add(ws);
+  return true;
+}
+
+/** Closing is idempotent both for registry membership and admission capacity. */
+export function closeAdmittedOrdinarySessionWebSocket(
+  ws: ServerWebSocket<WsConnectionData>,
+  admission: OrdinarySessionWebSocketAdmissionController,
+): void {
+  removeWsClient(ws);
+  if (admittedClients.delete(ws)) {
+    const bound = readOrdinarySessionWebSocketAdmission(ws.data);
+    void admission.releaseLease(bound?.lease);
+  }
+}
+
+export function closeAllWsClients(code = 1001, reason = "Server shutting down"): void {
+  const failures: unknown[] = [];
+  for (const [, client] of clients) {
+    try {
+      client.ws.close(code, reason);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Failed to close one or more WebSocket clients during shutdown");
   }
 }
 

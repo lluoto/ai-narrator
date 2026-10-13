@@ -132,7 +132,7 @@ export function buildIngestReport(ctx: IngestReportContext): string {
   // ── 条目与物品 ──
   lines.push(
     "── 条目与物品 ──",
-    `条目 ${ctx.itemInputCount} 送分类 / 分类返回 ${ctx.itemKindsSize}（全文共 ${ctx.itemIdsSize} 个 ▶，其余不在场景块上）`,
+    `条目 ${ctx.itemInputCount} 送分类 / 分类返回 ${ctx.itemKindsSize}（全文共 ${ctx.itemIdsSize} 个结构化条目，来源包括显式标记与受上下文约束的发现列表；其余不在场景块上）`,
     `条目分类分布: ${[...ctx.itemDist].map(([k, n]) => `${k} ${n}`).join(" / ") || "无"}`,
     "",
   );

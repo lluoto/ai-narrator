@@ -12,10 +12,11 @@ import { resolveCheckValue } from "../character/coc-character";
 import { isDowned } from "./run-state";
 import type { Cast, Cursor } from "./run-state";
 import { say, sayMech, emit } from "./narration";
-import { check, applyDamage, healWound } from "./checks";
+import { check, applyDamage, healWound, MAX_PENALTY_DICE } from "./checks";
 import { rollDice, trapsInScene, attributeValue } from "./trap-util";
 import { needsMajorWoundCheck, type WoundSeverity } from "../combat/wound-effects";
 import { activeHooks } from "./ruleset";
+import { isNightPeriod } from "../rules/game-time";
 
 /**
  * 一次进场的陷阱结算。
@@ -79,9 +80,12 @@ for (const trapItem of trapsInScene(module.items, scene.id)) {
     const skillVal = resolveCheckValue(pc, skillName);
 
     if (skillVal > 0) {
-      // 惩罚骰（夜晚等）：每个惩罚骰多掷一颗十位骰取最差
+      // `penaltyDice` 始终生效；`nightPenaltyDice` 只在共享游戏时钟的夜间额外生效。
+      // 两者合并后复用 check()/CoC 的既有两枚上限，不在这里另造一套掷骰规则。
       // 惩罚骰不写进 label —— check() 自己会标，写这儿会打印两遍
-      const penalty = mech.detect.penaltyDice ?? 0;
+      const penalty = Math.min(MAX_PENALTY_DICE,
+        (mech.detect.penaltyDice ?? 0)
+          + (isNightPeriod(cursor.gameTime.period) ? (mech.detect.nightPenaltyDice ?? 0) : 0));
       const label = `${skillName}（发现${trapItem.name}）`;
       const r = check(skillVal, vName, label, mech.detect.difficulty, penalty);
       if (r.isSuccess) {

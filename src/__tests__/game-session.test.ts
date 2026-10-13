@@ -2,13 +2,25 @@
 // bun test src/__tests__/game-session.test.ts
 
 import { describe, it, expect, beforeEach } from "bun:test";
-import { GameSession } from "../api/game-session";
+import { GameSession, runOrdinaryDurableActionTransaction } from "../api/game-session";
+import { ordinaryGameSessionSnapshotHash, type OrdinarySnapshotJson } from "../api/ordinary-game-session-snapshot";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
 import { CareerFileStore } from "../character/career-file";
 import type { CharacterSnapshot } from "../character/career";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 
 let session: GameSession;
+const durableCareerHostCapability = Object.freeze(Object.create(null)) as object;
+
+async function durableCareerAct(session: GameSession, input: string) {
+  return runOrdinaryDurableActionTransaction(
+    session,
+    durableCareerHostCapability,
+    async (act) => act(input),
+  );
+}
 
 beforeEach(() => {
   // 确保每个测试获得新的 GameSession（cosmic-horror, 无 archetype, 默认 LLM key → MockLLM）
@@ -21,7 +33,7 @@ beforeEach(() => {
     model: "mock",
     maxTokens: 1024,
     temperature: 0.7,
-  }, undefined, "调查员");
+  }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
 });
 
 // ============================================================
@@ -166,10 +178,11 @@ describe("考察", () => {
     expect(res.narrative).toContain("侦查检查");
   });
 
-  it("阅读某物给出翻阅叙述", async () => {
+  it("未声明物品的阅读明确拒绝且不伪造翻阅叙述", async () => {
     const res = await session.act("阅读日记");
-    expect(res.narrative).toContain("翻阅");
+    expect(res.narrative).toContain("无法阅读");
     expect(res.narrative).toContain("日记");
+    expect(res.narrative).not.toContain("翻阅");
   });
 });
 
@@ -202,12 +215,48 @@ describe("战斗（CoC 模式）", () => {
 
 describe("死亡处理", () => {
   it("死亡后操作返回死亡消息", async () => {
-    session.dead = true;
-    const res = await session.act("观察");
-    expect(res.dead).toBe(true);
-    expect(res.events.length).toBeGreaterThan(0);
-    const deathEvent = res.events.find(e => e.content.includes("死"));
-    expect(deathEvent).toBeDefined();
+    const fatal = new GameSession(
+      "test-session-real-death",
+      "cosmic-horror",
+      {
+        apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
+        model: "mock", maxTokens: 1024, temperature: 0.7,
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "preferred",
+      { careerEntryPersistence: "transient" },
+    );
+    const originalRandom = Math.random;
+    try {
+      restoreSignedOrdinaryWorld(fatal, {
+        apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
+        model: "mock", maxTokens: 1024, temperature: 0.7,
+      }, (world) => world.upsertEntity({
+        id: "real-death-monster", name: "real death monster", type: "monster",
+        hp: 200, maxHp: 200, ac: 0, status: [], position: "tavern", scene_id: "tavern",
+      }));
+      expect(fatal.setPlayerHp("p1", 1)).toMatchObject({ ok: true });
+      // Production combat's counterattack route is deterministic under this
+      // sequence and is the only authority allowed to establish a death.
+      const values = [0, 0, 0.99, 0, 0, 0.99, 0, 0, 0, 0.99, 0.99];
+      let index = 0;
+      Math.random = () => values[index++] ?? 0.99;
+      const death = await fatal.act("攻击 real death monster");
+      expect(death).toMatchObject({ dead: true, terminal: { kind: "death" } });
+      const res = await fatal.act("观察");
+      expect(res.dead).toBe(true);
+      expect(res).toMatchObject({ terminal: { kind: "death" } });
+      expect(res.events.length).toBeGreaterThan(0);
+      const deathEvent = res.events.find(e => e.content.includes("死"));
+      expect(deathEvent).toBeDefined();
+    } finally {
+      Math.random = originalRandom;
+      fatal.close();
+    }
   });
 });
 
@@ -419,11 +468,11 @@ describe("CoC 技能成长", () => {
       model: "mock",
       maxTokens: 1024,
       temperature: 0.7,
-    }, undefined, "调查员");
+    }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
   });
 
-  it("调查失败后 skillMarks 记录存在", async () => {
-    // 多次调查以累积失败
+  it("调查后 skillMarks 记录存在", async () => {
+    // 多次调查以视察既有的 skillMarks 存储
     for (let i = 0; i < 10; i++) {
       await growthSession.act("调查尸体");
     }
@@ -432,29 +481,40 @@ describe("CoC 技能成长", () => {
     expect(typeof growthSession.skillMarks).toBe("object");
   });
 
-  it("休息时触发技能成长检定", async () => {
-    // 先累积足够的失败次数
+  it("模组结算请求需确认，确认后才触发技能成长检定", async () => {
+    // 先执行若干技能检定
     for (let i = 0; i < 6; i++) {
       await growthSession.act("调查书桌");
     }
-    // 休息应该触发技能成长
+    // 显式模组结算应该触发技能成长
     // ⚠ 这条原先是**空心的**：filter 出成长消息却不看它，只断言
     //   `res.events.length > 0`，注释写「可能有成长消息（取决于随机检定结果）」。
     //   实测 10 次休息**一次都没有**成长消息 —— 不是随机，是**前提没建立**：
-    //   CoC 7e 的规则是「技能检定**失败**才留成长标记」（见 game-session
-    //   记录标记那一处），而这个测试休息之前从没失败过任何检定。
+    //   CoC 7e 的规则是「技能检定**成功**才留成长标记」（见 game-session
+    //   记录标记那一处），而这个测试休息之前从未确定地造成过成功检定。
     //   也就是说它断言的那件事根本不会发生，只是断言写得太松没露馅。
     //
-    //   把前提补上：`handleRest` 在没有 activeCharacter 时会**直接早退**
-    //   （它连成长那一段都到不了），所以先建角色，再塞一个成长标记。
+    //   把前提补上：先建角色，再塞一个成长标记；短休只处理休整，
+    //   不会结算或清除这个标记。
     await growthSession.act("创建角色 investigator 成长测试员");
-    growthSession.skillGrowthMarks.push("spot_hidden");
-    const res = await growthSession.act("休息");
+    await growthSession.act("加载模组 普瑞米尔的谷仓");
+    const originalRandom = Math.random;
+    try {
+      Math.random = () => 0;
+      expect((await growthSession.act("\u8c03\u67e5")).error).toBeUndefined();
+    } finally {
+      Math.random = originalRandom;
+    }
+    const requested = await growthSession.act("模组结算");
+    expect(requested.narrative).toContain("确认离开");
+    expect(growthSession.dead).toBe(false);
+    expect(growthSession.skillGrowthMarks).toEqual(["spot_hidden"]);
+    const res = await growthSession.act("确定");
     const growthEvents = res.events.filter(
-      e => e.content.includes("技能成长") || e.content.includes("成长检查")
+      e => e.content.includes("成长")
     );
     expect(growthEvents.length).toBeGreaterThan(0);
-    // 结算完标记要清空，否则下次休息会拿同一个标记再涨一次
+    // 结算完标记要清空，避免下一次模块结算重复消费。
     expect(growthSession.skillGrowthMarks).toEqual([]);
   });
 });
@@ -464,16 +524,35 @@ describe("CoC 技能成长", () => {
 // ============================================================
 describe("故事生成器集成", () => {
   it("生成故事替换世界场景和实体", async () => {
-    const res = await session.act("生成故事");
-    expect(res).toBeDefined();
-    const allContent = res.events.map(e => e.content).join(" ");
-    expect(allContent).toContain("新故事已生成");
-    expect(allContent).toContain("场景");
-    // 场景数应 > 0
-    expect(session["sceneDisplayNames"]).toBeDefined();
-    expect(Object.keys(session["sceneDisplayNames"]).length).toBeGreaterThan(1);
-    // 别名应存在
-    expect(Object.keys(session["sceneAliases"]).length).toBeGreaterThan(1);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "generated-story-durable-"));
+    const storySession = new GameSession("generated-story-durable", "cosmic-horror", {
+      apiKey: "sk-placeholder",
+      baseUrl: "http://localhost:9999",
+      model: "mock",
+      maxTokens: 1024,
+      temperature: 0.7,
+    }, undefined, "调查员", undefined, { careerRoot: root }, undefined, "development_fallback", {
+      ordinaryDurableHostCapability: durableCareerHostCapability,
+    });
+    // A real character makes the generated module's public ordinary snapshot
+    // portable, so static presentation can be observed without peeking into
+    // the session's runtime authority.
+    try {
+      expect((await durableCareerAct(storySession, "创建角色 investigator 叙事测试")).error).toBeUndefined();
+      const res = await storySession.act("生成故事");
+      expect(res).toBeDefined();
+      const allContent = res.events.map(e => e.content).join(" ");
+      expect(allContent).toContain("新故事已生成");
+      expect(allContent).toContain("场景");
+      // The ordinary snapshot is the public, portable observation of generated
+      // canonical scene presentation metadata.
+      const generatedStatics = storySession.exportOrdinarySessionSnapshot().state;
+      expect(Object.keys(generatedStatics.sceneDisplayNames).length).toBeGreaterThan(1);
+      expect(Object.keys(generatedStatics.sceneAliases).length).toBeGreaterThan(1);
+    } finally {
+      storySession.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("生成故事后观察有场景描述", async () => {
@@ -642,10 +721,9 @@ describe("CoC 传承系统", () => {
     }
   });
 
-  it("读档（指定不存在的角色）提示未找到", async () => {
+  it("读档（指定不存在的角色）在普通会话中被拒绝", async () => {
     const res = await session.act("读档 不存在的角色");
-    const event = res.events.find(e => e.content.includes("未找到"));
-    expect(event).toBeDefined();
+    expect(res.error?.code).toBe("ordinary_action_unsupported");
   });
 });
 
@@ -658,7 +736,7 @@ describe("CoC 休息（RAW 周结算）", () => {
     const restSession = new GameSession("rest-hp-test", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, undefined, "调查员");
+    }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
     await restSession.act("创建角色 investigator 张三");
 
     // 获取玩家当前 HP —— 世界实体的真实 id 是 activePlayerId（单人局默认
@@ -668,9 +746,7 @@ describe("CoC 休息（RAW 周结算）", () => {
     const maxHp = player.maxHp;
 
     // 直接降低 HP
-    restSession.world.getDatabase()
-      .prepare("UPDATE entities SET hp = ? WHERE id = ?")
-      .run(Math.floor(maxHp / 2), restSession.activePlayerId);
+    expect(restSession.setPlayerHp(restSession.activePlayerId, Math.floor(maxHp / 2)).ok).toBe(true);
 
     // 休息（未接受治疗 → 不应恢复 HP）
     const res = await restSession.act("休息");
@@ -689,8 +765,9 @@ describe("CoC 休息（RAW 周结算）", () => {
     const restSession = new GameSession("rest-hp-test2", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, undefined, "调查员");
-    await restSession.act("创建角色 investigator 张三");
+    }, "investigator", "张三", undefined, undefined, undefined, "development_fallback", {
+      ordinaryDurableHostCapability: durableCareerHostCapability,
+    });
 
     const state = restSession.world.getCurrentState();
     const player = state.entities[restSession.activePlayerId];
@@ -698,12 +775,21 @@ describe("CoC 休息（RAW 周结算）", () => {
     const halfHp = Math.floor(maxHp / 2);
 
     // 直接降低 HP
-    restSession.world.getDatabase()
-      .prepare("UPDATE entities SET hp = ? WHERE id = ?")
-      .run(halfHp, restSession.activePlayerId);
+    expect(restSession.setPlayerHp(restSession.activePlayerId, halfHp).ok).toBe(true);
 
-    // 标记已接受治疗
-    restSession["_woundsTreated"] = true;
+    // 通过真实成功急救取得本次休息的恢复资格，而不是写入会话内部状态。
+    const originalRandom = Math.random;
+    let afterFirstAid = halfHp;
+    try {
+      Math.random = () => 0;
+      const firstAid = await restSession.act("急救伤口");
+      expect(firstAid.error).toBeUndefined();
+      afterFirstAid = firstAid.state.player.hp;
+      expect(afterFirstAid).toBeGreaterThan(halfHp);
+      expect(restSession.exportOrdinarySessionSnapshot().state.woundsTreatedByPC).toEqual([restSession.activePlayerId]);
+    } finally {
+      Math.random = originalRandom;
+    }
 
     // 休息
     const res = await restSession.act("休息");
@@ -711,7 +797,7 @@ describe("CoC 休息（RAW 周结算）", () => {
     // 验证 HP 增加了
     const afterState = restSession.world.getCurrentState();
     const afterPlayer = afterState.entities[restSession.activePlayerId];
-    expect(afterPlayer.hp).toBeGreaterThan(halfHp);
+    expect(afterPlayer.hp).toBeGreaterThan(afterFirstAid);
     expect(afterPlayer.hp).toBeLessThanOrEqual(maxHp);
 
     // 应包含愈合消息
@@ -723,7 +809,7 @@ describe("CoC 休息（RAW 周结算）", () => {
     const restSession2 = new GameSession("rest-hp-test3", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, undefined, "调查员");
+    }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
     await restSession2.act("创建角色 investigator 李四");
     const res = await restSession2.act("休息");
 
@@ -732,43 +818,58 @@ describe("CoC 休息（RAW 周结算）", () => {
     expect(refreshEvent).toBeDefined();
   });
 
-  it("模组结算可触发技能成长", async () => {
+  it("模组结算请求需确认，确认后可触发技能成长", async () => {
     const restSession3 = new GameSession("rest-hp-test4", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, undefined, "调查员");
+    }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
     await restSession3.act("创建角色 investigator 王五");
+    await restSession3.act("加载模组 普瑞米尔的谷仓");
 
     // 先标记一个技能
-    restSession3.skillGrowthMarks = ["fighting"];
+    const originalRandom = Math.random;
+    try {
+      Math.random = () => 0;
+      expect((await restSession3.act("\u8c03\u67e5")).error).toBeUndefined();
+    } finally {
+      Math.random = originalRandom;
+    }
 
-    // 模组结算
-    const res = await restSession3.act("模组结算");
+    // 模组结算先只打开离场确认。
+    const requested = await restSession3.act("模组结算");
+    expect(requested.narrative).toContain("确认离开");
+    expect(restSession3.dead).toBe(false);
+    expect(restSession3.skillGrowthMarks).toEqual(["spot_hidden"]);
+    const res = await restSession3.act("确定");
 
-    // 应有技能成长消息
+    // 确认后才有技能成长消息。
     const growthEvent = res.events.find(e =>
-      e.content.includes("技能成长") || e.content.includes("成长")
+      e.content.includes("成长")
     );
     expect(growthEvent).toBeDefined();
   });
 
-  it("无技能标记时技能成长提示无进步", async () => {
+  it("无技能标记时结算请求仍需确认，确认后才结束模组并记录真实结局", async () => {
     const session = new GameSession("rest-hp-test5", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, undefined, "调查员");
-    await session.act("创建角色 investigator 赵六");
+    }, "investigator", "赵六", undefined, undefined, undefined, "development_fallback", {
+      ordinaryDurableHostCapability: durableCareerHostCapability,
+    });
+    await session.act("加载模组 普瑞米尔的谷仓");
 
     // 清空 growth marks
-    session.skillGrowthMarks = [];
 
-    const res = await session.act("模组结算");
+    const requested = await session.act("模组结算");
+    expect(requested.narrative).toContain("确认离开");
+    expect(session.dead).toBe(false);
+    expect(session.careerStore?.getEntries("赵六") ?? []).toHaveLength(0);
 
-    // 应有"没有可结算的成长"提示
-    const hintEvent = res.events.find(e =>
-      e.content.includes("没有可结算的成长")
-    );
-    expect(hintEvent).toBeDefined();
+    const res = await durableCareerAct(session, "确定");
+    expect(res.error).toBeUndefined();
+    expect(session.dead).toBe(false);
+    expect(res).toMatchObject({ dead: false, terminal: { kind: "module_departure" } });
+    expect(session.careerStore?.getEntries("赵六") ?? []).toHaveLength(1);
   });
 });
 
@@ -781,7 +882,7 @@ describe("CoC 状态显示 CoC 特有字段", () => {
     const statusSession = new GameSession("status-coc-test", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, undefined, "调查员");
+    }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
     await statusSession.act("创建角色 investigator 张三");
 
     const res = await statusSession.act("状态");
@@ -801,7 +902,7 @@ describe("CoC 状态显示 CoC 特有字段", () => {
     const statusSession2 = new GameSession("status-coc-test2", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, undefined, "调查员");
+    }, undefined, "调查员", undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" });
     await statusSession2.act("创建角色 investigator 李四");
 
     const res = await statusSession2.act("状态");
@@ -850,48 +951,44 @@ describe("角色卡传承集成", () => {
     expect(snap!.skills).toBeDefined();
   });
 
-  it("模组结算后 CareerEntry 被记录", async () => {
-    const { store: careerStore, dir } = createTestStore("career_entry");
+  it("模组结算请求确认后 CareerEntry 被记录", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "career-entry-"));
     const session = new GameSession("career-entry-test", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, "investigator", "鲍勃");
-
-    // 替换为独立 store
-    session.careerStore = careerStore;
-    // 重新拍快照
-    const c = session.activeCharacter!;
-    careerStore.saveSnapshot({
-      characterName: "鲍勃",
-      occupation: c.archetype,
-      attributes: { ...c.attributes },
-      skills: c.skillValues ? { ...c.skillValues } : {},
-      san: session.sanity.state.currentSAN,
-      maxSan: 99,
-      cthulhuMythos: 0,
-      hp: c.hp,
-      maxHp: c.maxHp,
-      creditRating: c.creditRating ?? 30,
-      createdAt: new Date().toISOString(),
+    }, "investigator", "鲍勃", undefined, { careerRoot: dir }, undefined, "development_fallback", {
+      ordinaryDurableHostCapability: durableCareerHostCapability,
     });
+    const careerStore = session.careerStore;
+    if (!careerStore) throw new Error("character construction must initialize the career read facade");
 
-    // 记录起点，再模拟 SAN 损失
-    (session as any)._moduleStartByPC.set("p1", { san: session.sanity.state.currentSAN, cm: 0 });
-    session.sanity.state.currentSAN -= 8;
-    session.skillGrowthMarks = ["fighting"];
+    // 真实安装路径会记录起点，再模拟 SAN 损失。
+    await session.act("加载模组 普瑞米尔的谷仓");
+    expect(session.setPlayerSan("p1", session.sanity.state.currentSAN - 8).ok).toBe(true);
+    const originalRandom = Math.random;
+    try {
+      Math.random = () => 0;
+      expect((await session.act("\u8c03\u67e5")).error).toBeUndefined();
+    } finally {
+      Math.random = originalRandom;
+    }
 
-    const res = await session.act("模组结算");
+    const requested = await session.act("模组结算");
+    expect(requested.narrative).toContain("确认离开");
+    expect(session.dead).toBe(false);
+    expect(careerStore.getEntries("鲍勃")).toHaveLength(0);
+    const res = await durableCareerAct(session, "确定");
 
     const entries = careerStore.getEntries("鲍勃");
-    // 可能有多条（每轮 hooks 可能触发多次），确保至少 1 条
-    expect(entries.length).toBeGreaterThanOrEqual(1);
-    const entry = entries.find(e => e.moduleName === "未知模组");
+    expect(entries).toHaveLength(1);
+    const entry = entries[0];
     expect(entry).toBeDefined();
+    expect(entry!.moduleId).toBe("premiers_barn");
+    expect(entry!.moduleName).toBe("普瑞米尔的谷仓");
     expect(entry!.sanChange).toBe(-8);
-    expect(entry!.endingId).toBe("completed");
+    expect(entry!.endingId).toBe("normal");
 
-    const completeEvent = res.events.find(e => e.content.includes("模组完成"));
-    expect(completeEvent).toBeDefined();
+    expect(res.events.some(e => e.content.includes("模组完成"))).toBe(false);
 
     try { fs.rmSync(dir, { recursive: true }); } catch { /* 清理临时目录：不存在或被占用都无所谓，失败不影响正确性 */ }
   });
@@ -951,16 +1048,58 @@ describe("角色卡传承集成", () => {
     try { fs.rmSync(dir, { recursive: true }); } catch { /* 清理临时目录：不存在或被占用都无所谓，失败不影响正确性 */ }
   });
 
-  it("不存在 careerStore 时模组结算不报错（向后兼容）", async () => {
+  it("transient host policy settles growth and clears marks without a career entry", async () => {
+    const source = new GameSession("career-none-test", "cosmic-horror", {
+      apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
+      model: "mock", maxTokens: 1024, temperature: 0.7,
+    }, "investigator", "张三");
+
+    // Growth settlement reads the persisted p1 sheet. Seed it through the
+    // ordinary portable boundary rather than a private map or active view.
+    const seeded = source.exportOrdinarySessionSnapshot();
+    const p1 = seeded.state.characters.find((entry) => entry.pcId === "p1");
+    if (!p1 || p1.sheet === null || Array.isArray(p1.sheet) || typeof p1.sheet !== "object") throw new Error("fixture requires p1 sheet");
+    const sheet = p1.sheet as Record<string, OrdinarySnapshotJson>;
+    const skillValues = sheet.skillValues;
+    if (skillValues === null || Array.isArray(skillValues) || typeof skillValues !== "object") throw new Error("fixture requires p1 skillValues");
+    (skillValues as Record<string, OrdinarySnapshotJson>).spot_hidden = 1;
+    const { snapshotHash: _discarded, ...unsigned } = seeded;
     const session = new GameSession("career-none-test", "cosmic-horror", {
       apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
       model: "mock", maxTokens: 1024, temperature: 0.7,
-    }, undefined, "张三");
+    }, undefined, undefined, undefined, undefined, undefined, undefined, {
+      careerEntryPersistence: "transient",
+    });
+    session.restoreOrdinarySessionSnapshot({ ...unsigned, snapshotHash: ordinaryGameSessionSnapshotHash(unsigned) });
+    source.close();
 
-    session.careerStore = null;
-    session.skillGrowthMarks = ["fighting"];
-    const res = await session.act("模组结算");
-    expect(res.narrative).toBeDefined();
-    expect(res.narrative).not.toContain("Error");
+    await session.act("加载模组 普瑞米尔的谷仓");
+    const entriesBefore = session.careerStore?.getEntries("张三") ?? [];
+    const originalRandom = Math.random;
+    try {
+      Math.random = () => 0;
+      expect((await session.act("\u8c03\u67e5")).error).toBeUndefined();
+      Math.random = (() => {
+        const values = [0.5, 0];
+        let index = 0;
+        return () => values[index++] ?? 0;
+      })();
+      const requested = await session.act("模组结算");
+      expect(requested.narrative).toContain("确认离开");
+      expect(session.dead).toBe(false);
+      expect(session.activeCharacter!.skillValues.spot_hidden).toBe(1);
+      expect(session.skillGrowthMarks).toEqual(["spot_hidden"]);
+
+      const res = await session.act("确定");
+      expect(res.error).toBeUndefined();
+      expect(session.dead).toBe(false);
+      expect(res).toMatchObject({ dead: false, terminal: { kind: "module_departure" } });
+      expect(session.activeCharacter!.skillValues.spot_hidden).toBe(2);
+      expect(session.skillGrowthMarks).toEqual([]);
+      expect(session.careerStore?.getEntries("张三") ?? []).toEqual(entriesBefore);
+    } finally {
+      Math.random = originalRandom;
+      session.close();
+    }
   });
 });

@@ -16,6 +16,7 @@
 
 import { describe, it, expect, beforeEach } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const LLM = {
   apiKey: "sk-placeholder",
@@ -62,13 +63,13 @@ describe("场景切换的写入路径", () => {
   });
 
   it("KP 面板切到未注册场景仍然被拒绝（既有契约不变）", () => {
-    expect(session.setScene("never_registered_at_all")).toBe(false);
+    expect(activateRegisteredGameSessionSceneForTest(session, "never_registered_at_all")).toBe(false);
   });
 
-  it("KP 面板切到已注册场景成功且真的生效", () => {
-    session.world.registerScene("study_room", "书房");
-    expect(session.setScene("study_room")).toBe(true);
-    expect(session.world.getCurrentState().scene).toBe("study_room");
+  it("KP 面板切到已注册场景成功且真的生效", async () => {
+    expect((await session.act("前往 酒馆")).error).toBeUndefined();
+    expect(activateRegisteredGameSessionSceneForTest(session, "tavern")).toBe(true);
+    expect(session.world.getCurrentState().scene).toBe("tavern");
   });
 });
 

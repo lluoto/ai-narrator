@@ -8,6 +8,8 @@ import { describe, test, expect } from "bun:test";
 import { buildIngestReport, type IngestReportContext } from "../ingest/ingest-report";
 import { computeBaselineComparison, type BaselineData } from "../ingest/baseline-comparison";
 import type { ModuleData, Scene } from "../module/types";
+import { buildScenes } from "../ingest/build-scenes";
+import type { Section, SectionItem } from "../ingest/sectionize";
 
 const scene = (id: string, name: string): Scene => ({
   id, name, description: "", clues: [], npcIds: [], connections: [],
@@ -125,6 +127,35 @@ describe("无基准模式：每一处依赖基准的小节都能被判据读出�
 
   test("悬空引用检查不受「无基准」影响——内部一致性两种模式都跑", () => {
     expect(report).toContain("悬空引用（item.sceneId 在生成的 scenes 里找不到）0 个: 无");
+  });
+});
+
+describe("结构化条目报告措辞", () => {
+  test("发现列表生成的条目不被报告或 warning 误称为 ▶ 条目", () => {
+    // 这些条目来自受上下文约束的发现列表，原文行本身没有 ▶ 标记。
+    const discoveryItems: SectionItem[] = [
+      { name: "样本甲", text: "倒在床边。", source: { page: 1, line: 3 } },
+      { name: "样本乙", text: "嵌在墙上。", source: { page: 1, line: 4 } },
+      { name: "样本丙", text: "有奇怪的痕迹。", source: { page: 1, line: 5 } },
+    ];
+    const section: Section = {
+      title: "调查地点",
+      body: "搜索房间后可以发现以下物品。",
+      items: discoveryItems,
+      source: { page: 1, line: 1 },
+    };
+    const sceneWarnings = buildScenes([section], new Map([["调查地点", "scene"]]), ["scene_01"]).warnings;
+    const report = buildIngestReport({
+      ...baseCtx(),
+      itemInputCount: discoveryItems.length,
+      itemKindsSize: discoveryItems.length,
+      itemIdsSize: discoveryItems.length,
+      sceneWarnings,
+    });
+
+    expect(report).toContain("全文共 3 个结构化条目");
+    expect(report).not.toContain("全文共 3 个 ▶");
+    expect(report).not.toContain("3 个 ▶ 条目");
   });
 });
 

@@ -1,7 +1,8 @@
 import { type CandidateStatus, type ClaimCandidate } from "./source-authority";
 import { sha256, validateEvidenceRef, type DocumentBlock, type DocumentBlockKind, type DocumentIR, type EvidenceRef } from "../ingest/document-ir";
 
-export const SOURCE_FACT_GRAPH_SCHEMA_VERSION = "1.0.0";
+/** Adds source-exact table_row statements and their structural relations. */
+export const SOURCE_FACT_GRAPH_SCHEMA_VERSION = "1.1.0";
 
 export type SourceStatementKind = DocumentBlockKind | "marked_item_name" | "marked_item_body";
 export type SourceRelationKind = "contains" | "follows" | "heading_scopes" | "marked_item_name" | "marked_item_body";

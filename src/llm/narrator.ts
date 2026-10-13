@@ -14,6 +14,7 @@
 //                    "lethal"），由调用方传入 outcome.result === "kill" 决定。
 
 import type { LLMClient } from "./client";
+import { llmEnabled } from "./enabled";
 import { calcSeverity } from "../combat/wound-effects";
 import { checkDialogueText } from "../world/world-constraint";
 import {
@@ -143,7 +144,7 @@ async function generateNarrativeLLM(
       { role: "system", content: NARRATIVE_SYSTEM_PROMPT },
       { role: "user", content: userPrompt },
     ],
-    { temperature: 0.8, maxTokens: 200, timeout: 120000 }
+    { temperature: 0.8, maxTokens: 200, timeout: 120000, maxAttempts: 1, workload: "narration" }
   );
 
   // 世界模型约束：时代科技黑名单 / meta 词汇。命中则重生成一次（新上下文），再命中则交回降级路径
@@ -154,7 +155,7 @@ async function generateNarrativeLLM(
         { role: "system", content: NARRATIVE_SYSTEM_PROMPT + "\n禁止使用任何 1920 年代不存在的现代科技词汇（手机、电视、电脑、互联网等）。" },
         { role: "user", content: userPrompt },
       ],
-      { temperature: 0.6, maxTokens: 200, timeout: 120000 }
+      { temperature: 0.6, maxTokens: 200, timeout: 120000, maxAttempts: 1, workload: "narration" }
     )).trim();
   }
   if (checkDialogueText(text)) {
@@ -197,10 +198,32 @@ export async function generateNarrative(
   maxHp: number,
   opts?: { fumble?: boolean },
 ): Promise<string> {
-  if (_narratorLLM) {
+  return generateNarrativeWithLLM(
+    _narratorLLM,
+    attackerName, defenderName, weaponName, outcome, maxHp, opts,
+  );
+}
+
+/**
+ * Generate one combat narration with the client that owns the current runtime.
+ *
+ * `null` is an explicit offline choice: it must not fall back to the CLI's
+ * legacy module-global narrator.  GameSession and play-module use this entry
+ * point so concurrent sessions cannot borrow each other's configuration.
+ */
+export async function generateNarrativeWithLLM(
+  llm: LLMClient | null,
+  attackerName: string,
+  defenderName: string,
+  weaponName: string,
+  outcome: NarrativeOutcome,
+  maxHp: number,
+  opts?: { fumble?: boolean },
+): Promise<string> {
+  if (llm && llmEnabled()) {
     try {
       return await generateNarrativeLLM(
-        attackerName, defenderName, weaponName, outcome, maxHp, _narratorLLM
+        attackerName, defenderName, weaponName, outcome, maxHp, llm
       );
     } catch (err) {
       // console.warn(`  ⚠ LLM 叙事失败，退化到模板: ${(err as Error).message.slice(0, 80)}`);

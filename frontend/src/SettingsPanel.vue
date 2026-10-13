@@ -1,13 +1,19 @@
 <script setup>
 import { ref, onMounted } from 'vue'
+import { ownerFetch } from './owner-auth.js'
 const emit = defineEmits(['close'])
 const config = ref(null)
 const loading = ref(true)
+const loadError = ref('')
 onMounted(async () => {
   try {
-    const res = await fetch('/api/config')
+    const res = await ownerFetch('/api/config')
+    if (!res.ok) throw new Error('Unable to load server settings')
     config.value = await res.json()
-  } catch { /* ignore */ }
+  } catch {
+    config.value = null
+    loadError.value = 'Unable to load server settings.'
+  }
   finally { loading.value = false }
 })
 </script>
@@ -21,6 +27,7 @@ onMounted(async () => {
         </div>
         <div class="sp-body">
           <div v-if="loading" class="sp-loading">加载中…</div>
+          <div v-else-if="loadError" class="sp-loading">{{ loadError }}</div>
           <template v-if="config">
             <section class="sp-section">
               <h4>LLM 配置</h4>

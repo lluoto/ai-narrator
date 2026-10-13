@@ -10,9 +10,27 @@
 // 别把这条当成漏测顺手补上。
 
 import { describe, test, expect } from "bun:test";
-import { extractPages } from "../ingest/pdf-source";
+import { PDFParse } from "pdf-parse";
+import { buildDocumentIR, extractDocumentPages, extractPages } from "../ingest/pdf-source";
+import { sha256 } from "../ingest/document-ir";
+import { minimalPdfBytes } from "./helpers/minimal-pdf";
 
 describe("extractPages", () => {
+  test("releases the whole-document parser after extraction", async () => {
+    const originalDestroy = PDFParse.prototype.destroy;
+    let destroyCalls = 0;
+    PDFParse.prototype.destroy = async function (this: PDFParse): Promise<void> {
+      destroyCalls++;
+      await originalDestroy.call(this);
+    };
+    try {
+      await extractDocumentPages(minimalPdfBytes("parser lifecycle fixture"));
+      expect(destroyCalls).toBe(1);
+    } finally {
+      PDFParse.prototype.destroy = originalDestroy;
+    }
+  });
+
   // await 不能省：expect(...).rejects 返回的是 Promise，
   // 不 await 就没人观察这个断言，函数不抛时测试照样绿 —— 等于什么都没测
   test("空数据抛的必须是本模块那条 —— 返回空数组会让整条管线安静地产出零个场景", async () => {
@@ -32,5 +50,22 @@ describe("extractPages", () => {
     // 别人家的文案设成我们的回归门槛 —— pdf-parse 换个说法就无端变红，
     // 而本模块一行没动。这里能诚实保证的只有「不许静默成功」，到此为止。
     await expect(extractPages(new TextEncoder().encode("这不是 PDF"))).rejects.toThrow();
+  });
+});
+
+describe("buildDocumentIR", () => {
+  test("retains the SHA-256 of non-empty PDF input bytes after pdf-parse", async () => {
+    const pdfBytes = minimalPdfBytes("PDF identity fixture");
+    const expectedDocumentHash = sha256(pdfBytes);
+
+    const document = await buildDocumentIR(pdfBytes);
+
+    expect(document.documentHash).toBe(expectedDocumentHash);
+    expect(document.hashSource).toBe("pdf_bytes_sha256");
+    expect(document.pages.length).toBeGreaterThan(0);
+    for (const page of document.pages) {
+      expect(page.documentHash).toBe(expectedDocumentHash);
+      expect(page.hashSource).toBe("pdf_bytes_sha256");
+    }
   });
 });

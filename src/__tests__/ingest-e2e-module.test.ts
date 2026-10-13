@@ -20,6 +20,10 @@ import { runModule } from "../play-module";
 import type { ModuleData } from "../module/types";
 import type { PlayerDecision } from "../agent/player-agent";
 import { MODULE_ENDING_SUPPORT } from "../play/module-departure";
+import {
+  classifyE2ERun,
+  selectE2ESupport,
+} from "../../scripts/ingest/e2e-result";
 
 describe("neutralSupport：形状与「不编」承诺（回归 60c7ed4 误删这条判据本该拦住的问题）", () => {
   it("返回一份完整的 ModuleSupport，字段类型都对得上", () => {
@@ -120,22 +124,58 @@ describe("端到端：摄取出来的模组（用最小固件代表）能用 neu
   });
 });
 
-describe("MODULE_ENDING_SUPPORT 登记「barn-of-premier-ingested」（阶段4「顺带」项）", () => {
-  it("登记表里确实有这个 id，不用走 GENERIC_DEPARTURE_LINES 的通用收场", () => {
-    expect(MODULE_ENDING_SUPPORT["barn-of-premier-ingested"]).toBeDefined();
+describe("ingested e2e support and outcome truthfulness", () => {
+  it("an arbitrary unregistered ingested id cannot inherit the barn ending support", () => {
+    const selected = selectE2ESupport("any-ingested-module-with-scene-ids");
+
+    expect(MODULE_ENDING_SUPPORT["barn-of-premier-ingested"]).toBeUndefined();
+    expect(selected.source).toBe("neutral");
+    expect(selected.support).not.toBe(MODULE_ENDING_SUPPORT.premiers_barn);
+    expect(selected.support.evaluateEnding(() => false, () => false)).toBeNull();
   });
 
-  it("复用的是 BARN_SUPPORT——同一份对象，不是另起一份假数据", () => {
-    expect(MODULE_ENDING_SUPPORT["barn-of-premier-ingested"]).toBe(MODULE_ENDING_SUPPORT["premiers_barn"]);
+  it("uses a registered support only for its exact module id", () => {
+    const selected = selectE2ESupport("premiers_barn");
+    expect(selected.source).toBe("registered");
+    expect(selected.support).toBe(MODULE_ENDING_SUPPORT.premiers_barn);
   });
 
-  it("什么线索/场景都没有时，evaluateEnding 仍然给出一个真实结局（Normal End），不是 null", () => {
-    const support = MODULE_ENDING_SUPPORT["barn-of-premier-ingested"]!;
-    const ending = support.evaluateEnding(
-      () => false, // 摄取产物自己的 id 空间产不出任何 BARN_OF_PREMIER 线索 id，isClueFound 恒假
-      () => false,
-    );
-    expect(ending).not.toBeNull();
-    expect(ending!.id).toBe("normal"); // 没有更具体的结局匹配时，兜底的那一条
+  it("does not call the action limit a completed playthrough", () => {
+    const result = classifyE2ERun({ stop: "action-limit", moved: true, terminalEnding: null });
+    expect(result.kind).toBe("action-limit");
+    expect(result.completed).toBe(false);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("does not call a timeout a completed playthrough", () => {
+    const result = classifyE2ERun({ stop: "timeout", moved: true, terminalEnding: null });
+    expect(result.kind).toBe("timeout");
+    expect(result.completed).toBe(false);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("reports movement without an ending as smoke evidence, not completion", () => {
+    const result = classifyE2ERun({ stop: "returned", moved: true, terminalEnding: null });
+    expect(result.kind).toBe("movement-smoke");
+    expect(result.completed).toBe(false);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("calls a run completed only when it returned with a terminal ending event", () => {
+    const result = classifyE2ERun({
+      stop: "returned",
+      moved: true,
+      terminalEnding: { id: "verified-ending", label: "Verified ending" },
+    });
+    expect(result.kind).toBe("terminal-completion");
+    expect(result.completed).toBe(true);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("keeps an engine crash distinct from both smoke and completion", () => {
+    const result = classifyE2ERun({ stop: "engine-crash", moved: true, terminalEnding: null });
+    expect(result.kind).toBe("engine-crash");
+    expect(result.completed).toBe(false);
+    expect(result.exitCode).toBe(1);
   });
 });

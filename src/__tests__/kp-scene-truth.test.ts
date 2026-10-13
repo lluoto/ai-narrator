@@ -9,8 +9,10 @@
 //
 // bun test src/__tests__/kp-scene-truth.test.ts
 
-import { describe, it, expect, beforeEach } from "bun:test";
+import { afterEach, describe, it, expect, beforeEach } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const LLM = {
   apiKey: "sk-placeholder",
@@ -25,10 +27,23 @@ let session: GameSession;
 beforeEach(() => {
   process.env.LLM_API_KEY = "";
   process.env.OPENAI_API_KEY = "";
-  session = new GameSession("kp-scene-truth", "cosmic-horror", LLM, "investigator", "调查员");
-  session.world.registerScene("docks", "码头");
-  session.world.registerScene("church", "教堂");
-  session.setScene("docks");
+  const source = new GameSession("kp-scene-truth", "cosmic-horror", LLM, "investigator", "调查员");
+  session = new GameSession(source.id, "cosmic-horror", LLM);
+  restoreSignedOrdinaryWorld(session, LLM, (world) => {
+    world.registerScene("docks", "码头");
+    world.registerScene("church", "教堂");
+    world.registerScene("地下室", "地下室");
+    world.upsertEntity({
+      id: "priest", name: "神父", type: "npc",
+      hp: 10, maxHp: 10, ac: 10, status: [], position: "church",
+    });
+    world.upsertEntity({
+      id: "sailor", name: "水手", type: "npc",
+      hp: 10, maxHp: 10, ac: 10, status: [], position: "docks",
+    });
+  }, source);
+  source.close();
+  activateRegisteredGameSessionSceneForTest(session, "docks");
   // 玩家先正常移动过一次：移动流程会留下一个 PC 实体钉住玩家位置
   // （movePlayerToScene 的写法，scene-bgm.test.ts 同样这么造）。
   // 分叉正是从这时起——在此之前 getPlayerPosition() 没有实体可读，
@@ -39,43 +54,33 @@ beforeEach(() => {
   // 断言"在场判定跟着 getDisplayedScene() 走"，不读这个实体的 id，
   // 写成什么字符串都不影响结论，但别被这个字面量误导成"player"是
   // 真实约定。
-  session.world.upsertEntity({
-    id: "player", name: "调查员", type: "pc",
-    hp: 10, maxHp: 10, ac: 10, status: [], position: "docks",
-  });
 });
+
+afterEach(() => session.close());
 
 describe("KP 切场景后的在场判定", () => {
   it("新场景里的 NPC 出现在面板上", () => {
-    session.world.upsertEntity({
-      id: "priest", name: "神父", type: "npc",
-      hp: 10, maxHp: 10, ac: 10, status: [], position: "church",
-    });
-
-    session.setScene("church");
+    activateRegisteredGameSessionSceneForTest(session, "church");
 
     expect(session.getState().npcs.map(n => n.name)).toContain("神父");
   });
 
   it("旧场景里的 NPC 不再出现在面板上", () => {
-    session.world.upsertEntity({
-      id: "sailor", name: "水手", type: "npc",
-      hp: 10, maxHp: 10, ac: 10, status: [], position: "docks",
-    });
-
-    session.setScene("church");
+    activateRegisteredGameSessionSceneForTest(session, "church");
 
     expect(session.getState().npcs.map(n => n.name)).not.toContain("水手");
   });
 
-  it("新场景里的线索可以被调查到", async () => {
-    session.investigation.registerSceneClue("church", "ritual_site");
-    session.setScene("church");
-    const before = session.sanity.state.currentSAN;
-
-    await session.act("调查");
-
-    // ritual_site 的 san_cost 是 "1/1d6"，首次调查无论成败都必定扣 SAN
-    expect(session.sanity.state.currentSAN).toBeLessThan(before);
+  it("有声明来源的场景线索可以被调查到", async () => {
+    expect((await session.act("加载模组 普瑞米尔的谷仓")).error).toBeUndefined();
+    expect(activateRegisteredGameSessionSceneForTest(session, "加比的拖车房")).toBe(true);
+    const real = Math.random;
+    Math.random = () => 0;
+    try {
+      expect((await session.act("检查餐厅")).error).toBeUndefined();
+    } finally {
+      Math.random = real;
+    }
+    expect(session.world.getCluesDiscoveredBy(session.activePlayerId).length).toBeGreaterThan(0);
   });
 });

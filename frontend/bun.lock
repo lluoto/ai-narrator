@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "frontend",
+      "name": "ai-narrator-frontend",
       "dependencies": {
         "vue": "^3.5.39",
       },

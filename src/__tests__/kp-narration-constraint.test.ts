@@ -13,7 +13,7 @@
 // bun test src/__tests__/kp-narration-constraint.test.ts
 
 import { describe, it, expect } from "bun:test";
-import { KPAgent } from "../agent/kp-agent";
+import { KPAgent, KP_NARRATION_UNAVAILABLE_NOTICE } from "../agent/kp-agent";
 import type { LLMLike, Message } from "../llm/client";
 import type { KPDirective } from "../agent/types";
 
@@ -39,9 +39,44 @@ class ScriptedLLM implements LLMLike {
   }
 }
 
+class ThrowingLLM implements LLMLike {
+  async chat(): Promise<string> {
+    throw new Error("forced provider outage");
+  }
+}
+
 const UNDISCOVERED_KEYS = ["冰箱与储物柜", "冰箱", "储物柜"];
 
 describe("KPAgent.narrateOutcome 接入约束层", () => {
+  it("provider failure only returns an honest notice plus the supplied public outcome", async () => {
+    const action = "把口袋里的钥匙插入锁芯并转动";
+    const outcome = "检定结果：门锁仍然锁着。";
+    for (const scene of ["普瑞米尔的谷仓入口", "曲径旅店大堂"]) {
+      const result = await new KPAgent(directive({ scene_description: scene }), new ThrowingLLM())
+        .narrateOutcome(action, outcome, []);
+      expect(result).toBe(`${KP_NARRATION_UNAVAILABLE_NOTICE}\n\n${outcome}`);
+      expect(result).not.toContain(action);
+      expect(result).not.toMatch(/寒风|巷子|翻书|线索|攻击/);
+    }
+  });
+
+  it("provider failure with no public outcome does not manufacture one", async () => {
+    const result = await new KPAgent(directive(), new ThrowingLLM()).narrateOutcome("调查柜子", "   ", []);
+    expect(result).toBe(KP_NARRATION_UNAVAILABLE_NOTICE);
+  });
+
+  it("a successful first response and the existing constraint fallback stay unchanged", async () => {
+    const clean = new KPAgent(directive(), new ScriptedLLM(["这里仍需要仔细检查。"]));
+    await expect(clean.narrateOutcome("观察", "判定结果", [])).resolves.toBe("这里仍需要仔细检查。");
+    const constrained = new KPAgent(directive(), new ScriptedLLM([
+      "冰箱里面空荡荡的，只有几层隔板和后壁。",
+      "储物柜也是空的，什么都没有。",
+    ]));
+    const fallback = await constrained.narrateOutcome("打开冰箱与储物柜", "判定结果", [], { undiscoveredClueKeys: UNDISCOVERED_KEYS });
+    expect(fallback).not.toContain(KP_NARRATION_UNAVAILABLE_NOTICE);
+    expect(fallback).not.toContain("冰箱");
+  });
+
   it("不传 constraintOpts 时行为不变（CLI 侧未改的调用点）——即使文本本身会踩线也不拦，因为没有 undiscoveredClueKeys 可比对", async () => {
     const llm = new ScriptedLLM(["冰箱里面空荡荡的，只有几层隔板和后壁。"]);
     const kp = new KPAgent(directive(), llm);

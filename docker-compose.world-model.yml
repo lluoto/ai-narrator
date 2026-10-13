@@ -1,0 +1,22 @@
+services:
+  trpg:
+    # This explicit override is opt-in. It keeps host paths out of the image
+    # and passes only fixed in-container paths to the application.
+    environment:
+      WORLD_MODEL_PATH: /app/assets/v18_all_master.jsonl
+      CTHULHU_MODEL_PATH: /app/assets/cthulhu_world_model.jsonl
+      COMPILED_CTHULHU_WORLD_MODEL_POLICY_PATH: /app/world-model-policy/compiled-cthulhu-world-model-policy.json
+      CTHULHU_DATASET_PATH: /app/cthulhu-dataset
+    volumes:
+      - type: bind
+        source: ${WORLD_MODEL_ASSETS_DIR:?set WORLD_MODEL_ASSETS_DIR to the host legacy assets directory}
+        target: /app/assets
+        read_only: true
+      - type: bind
+        source: ${COMPILED_CTHULHU_WORLD_MODEL_POLICY_HOST_PATH:?set COMPILED_CTHULHU_WORLD_MODEL_POLICY_HOST_PATH to the reviewed policy file}
+        target: /app/world-model-policy/compiled-cthulhu-world-model-policy.json
+        read_only: true
+      - type: bind
+        source: ${CTHULHU_DATASET_HOST_PATH:?set CTHULHU_DATASET_HOST_PATH to the host Cthulhu dataset root}
+        target: /app/cthulhu-dataset
+        read_only: true

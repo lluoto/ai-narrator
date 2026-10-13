@@ -1,7 +1,7 @@
 import { sha256 } from "../ingest/document-ir";
 import { validateSourceFactGraph, type FactInterpretationCandidate, type SourceFactGraph } from "./source-fact-graph";
 
-export const MECHANICS_IR_SCHEMA_VERSION = "1.0.0";
+export const MECHANICS_IR_SCHEMA_VERSION = "1.6.0";
 
 export type Scalar = string | number | boolean | null;
 export type Difficulty = "regular" | "hard" | "extreme";
@@ -14,19 +14,51 @@ export type Predicate =
   | { kind: "not"; predicate: Predicate }
   | { kind: "clue_found"; clueId: string }
   | { kind: "scene_visited"; sceneId: string }
+  /** Current location, deliberately distinct from historical scene_visited. */
+  | { kind: "current_scene"; sceneId: string }
   | { kind: "item_owned"; itemId: string }
   /** An ordinary connection is traversable unless a gate explicitly uses this predicate. */
   | { kind: "connection_unlocked"; connectionId: string }
   | { kind: "state_eq"; stateKey: string; value: Scalar }
-  | { kind: "npc_state"; npcId: string; state: string };
+  | { kind: "npc_state"; npcId: string; state: string }
+  | { kind: "encounter_defeated"; encounterId: string };
 
 export type Effect =
   | { kind: "discover_clue"; clueId: string }
+  | { kind: "acquire_item"; itemId: string }
   | { kind: "set_state"; stateKey: string; value: Scalar }
   | { kind: "unlock_connection"; connectionId: string }
   | { kind: "start_encounter"; encounterId: string }
+  /** Actor-only CoC SAN check. The executor, not MechanicsState, settles it. */
+  | { kind: "sanity_check"; passLoss: SanityLossSpec; failLoss: SanityLossSpec }
   | { kind: "reward"; rewardId: string }
   | { kind: "end_game"; endingId: string };
+
+/** A bounded, source-declared SAN loss expression; never an arbitrary string DSL. */
+export type SanityLossSpec =
+  | { kind: "fixed"; amount: number }
+  | { kind: "dice"; count: number; sides: number };
+
+/** A deliberately small arithmetic grammar shared by source NPCs and policy attacks. */
+export type CombatDamageSpec =
+  | { kind: "fixed"; amount: number }
+  | { kind: "dice"; count: number; sides: number };
+
+export type SanityCheckEffect = Extract<Effect, { kind: "sanity_check" }>;
+
+/**
+ * A SAN check is an actor consequence, not a second Effect DSL.  Its source
+ * binding belongs to the concrete player-action slot which selects it.
+ */
+export interface ActorEffectProvenance {
+  /** Exact branch-local address, e.g. onTraverse[1] or onFailure[0]. */
+  effectPath: string;
+  eventSlot:
+    | { kind: "connection"; connectionId: string; outcome: "traverse"; effectIndex: number }
+    | { kind: "discovery"; mechanismId: string; outcome: "success" | "failure" | "failback"; effectIndex: number };
+  /** Exact, question-scoped source declaration consumed by this slot. */
+  source: { statementId: string; quote: string };
+}
 
 export type CheckSpec =
   | { kind: "none" }
@@ -44,6 +76,8 @@ export interface DiscoveryMethodIR {
   onSuccess: Effect[];
   onFailure?: Effect[];
   failback?: { maxFailures: number; effects: Effect[] };
+  /** Present iff a discovery branch declares one or more sanity_check effects. */
+  actorEffectProvenance?: ActorEffectProvenance[];
   sourceInterpretationIds: string[];
 }
 
@@ -52,6 +86,8 @@ export interface ConnectionGateIR {
   connectionId: string;
   availability?: Predicate;
   onTraverse?: Effect[];
+  /** Present iff this traversal declares one or more sanity_check effects. */
+  actorEffectProvenance?: ActorEffectProvenance[];
   sourceInterpretationIds: string[];
 }
 
@@ -68,6 +104,117 @@ export interface EndingRuleIR {
   when: Predicate;
   effects: Effect[];
   sourceInterpretationIds: string[];
+}
+
+/**
+ * One source-bound, single-enemy encounter.  This is intentionally not a
+ * general combat language: one NPC, bounded HP, and bounded damage grammar.
+ */
+export interface EncounterDefinitionIR {
+  id: string;
+  encounterId: string;
+  sceneId: string;
+  combatantId: string;
+  maxHp: number;
+  dodge: number;
+  fight: number;
+  npcDamage: CombatDamageSpec;
+  victoryEffects: Effect[];
+  sourceInterpretationIds: string[];
+}
+
+/**
+ * A terminal-only, source-reviewed reward.  This deliberately reuses the
+ * ordinary MechanicsIR predicate AST: there is no free-form reward DSL.
+ */
+export interface RewardDefinitionIR {
+  id: string;
+  when: RewardPredicate;
+  settlement: RewardSettlement;
+  sourceInterpretationIds: string[];
+}
+
+/** The reward boundary intentionally admits only stable, symbol-scoped facts. */
+export type RewardPredicate =
+  | { kind: "all"; predicates: RewardPredicate[] }
+  | { kind: "any"; predicates: RewardPredicate[] }
+  | { kind: "not"; predicate: RewardPredicate }
+  | { kind: "clue_found"; clueId: string }
+  | { kind: "scene_visited"; sceneId: string }
+  | { kind: "item_owned"; itemId: string };
+
+export type RewardSanSettlement =
+  | { kind: "fixed"; amount: number }
+  | { kind: "dice"; count: number; sides: number };
+
+export interface RewardSettlement {
+  /** Positive SAN recovery only.  Loss has insanity semantics and is rejected here. */
+  san?: RewardSanSettlement;
+  cthulhuMythos?: number;
+  reputation?: number;
+}
+
+/** Durable, rolled outcome for one terminal reward; written by GameSession. */
+export interface TerminalRewardSettlement {
+  rewardId: string;
+  sourceInterpretationIds: string[];
+  san?: {
+    kind: RewardSanSettlement["kind"];
+    count?: number;
+    sides?: number;
+    rolls?: number[];
+    total: number;
+    before: number;
+    after: number;
+  };
+  /** CM changes also lower both SAN caps before any recovery in this reward. */
+  cthulhuMythos?: {
+    delta: number;
+    before: number;
+    after: number;
+    maxSanBefore: number;
+    maxSanAfter: number;
+    currentSanBefore: number;
+    currentSanAfter: number;
+  };
+  reputation?: { delta: number; before: number; after: number };
+}
+
+/**
+ * Auditable result of one source-bound actor SAN check.  This deliberately
+ * records the declared grammar and every random outcome, but not a second
+ * full SanityState snapshot; the state hashes bind the before/after chain.
+ */
+export interface SanityCheckSettlement {
+  actorId: "p1";
+  mechanismId: string;
+  /** The selected discovery branch or connection traversal. */
+  outcome: "success" | "failure" | "failback" | "traverse";
+  /** Original position in that branch's effects array, never a compacted index. */
+  effectIndex: number;
+  effectPath: string;
+  /** Source-bound event-slot provenance selected by the shared executor. */
+  provenance: ActorEffectProvenance;
+  sourceInterpretationIds: string[];
+  declared: { passLoss: SanityLossSpec; failLoss: SanityLossSpec };
+  check: {
+    roll: number;
+    passed: boolean;
+    selectedLoss: SanityLossSpec;
+    rolls: number[];
+    total: number;
+    appliedLoss: number;
+  };
+  madness: {
+    temporaryInsanityTriggered: boolean;
+    indefiniteInsanityTriggered: boolean;
+    indefiniteLevel: "mild" | "moderate" | "severe" | null;
+    boutDetail: { type: string; symptom: string; guidance: string; residual: string | null; outcome: string } | null;
+    newPhobias: string[];
+    newManias: string[];
+  };
+  beforeSanityHash: string;
+  afterSanityHash: string;
 }
 
 export interface MechanicsSymbols {
@@ -95,13 +242,17 @@ export interface MechanicsIR {
   connections: ConnectionGateIR[];
   transitions: StateTransitionIR[];
   endings: EndingRuleIR[];
+  encounterDefinitions: EncounterDefinitionIR[];
+  rewards: RewardDefinitionIR[];
 }
 
 export type DiscoveryMethodSpec = Omit<DiscoveryMethodIR, "sourceInterpretationIds"> & { kind: "discovery_method" };
 export type ConnectionGateSpec = Omit<ConnectionGateIR, "sourceInterpretationIds"> & { kind: "connection_gate" };
 export type StateTransitionSpec = Omit<StateTransitionIR, "sourceInterpretationIds"> & { kind: "state_transition" };
 export type EndingRuleSpec = Omit<EndingRuleIR, "sourceInterpretationIds"> & { kind: "ending_rule" };
-export type MechanicsCandidateSpec = DiscoveryMethodSpec | ConnectionGateSpec | StateTransitionSpec | EndingRuleSpec;
+export type EncounterDefinitionSpec = Omit<EncounterDefinitionIR, "sourceInterpretationIds"> & { kind: "encounter_definition" };
+export type RewardDefinitionSpec = Omit<RewardDefinitionIR, "sourceInterpretationIds"> & { kind: "reward_definition" };
+export type MechanicsCandidateSpec = DiscoveryMethodSpec | ConnectionGateSpec | StateTransitionSpec | EndingRuleSpec | EncounterDefinitionSpec | RewardDefinitionSpec;
 
 export interface MechanicsCompilationInput {
   moduleId: string;
@@ -155,9 +306,55 @@ function scalar(value: unknown, path: string): Scalar {
   throw new MechanicsCompilationError("invalid_schema", `expected scalar value: ${path}`, undefined, path);
 }
 
-function requiredEffects(value: unknown, path: string): Effect[] {
-  if (!Array.isArray(value) || value.length === 0) throw new MechanicsCompilationError("invalid_schema", `expected non-empty effects: ${path}`, undefined, path);
+function requiredEffects(value: unknown, path: string, allowEmpty = false): Effect[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) throw new MechanicsCompilationError("invalid_schema", `expected ${allowEmpty ? "effects" : "non-empty effects"}: ${path}`, undefined, path);
+  if (value.length > 100) throw new MechanicsCompilationError("invalid_schema", `too many effects in one player/automatic branch: ${path}`, undefined, path);
   return value.map((entry, index) => parseEffect(entry, `${path}[${index}]`));
+}
+
+function parseSanityLossSpec(value: unknown, path: string): SanityLossSpec {
+  if (!isRecord(value)) throw new MechanicsCompilationError("invalid_sanity_loss", `expected SAN loss object: ${path}`, undefined, path);
+  const kind = requiredString(value.kind, `${path}.kind`);
+  if (kind === "fixed") {
+    assertKeys(value, ["kind", "amount"], path);
+    if (typeof value.amount !== "number" || !Number.isInteger(value.amount) || value.amount < 0 || value.amount > 100) {
+      throw new MechanicsCompilationError("invalid_sanity_loss", "fixed SAN loss must be an integer from 0 to 100", undefined, `${path}.amount`);
+    }
+    return { kind, amount: value.amount };
+  }
+  if (kind === "dice") {
+    assertKeys(value, ["kind", "count", "sides"], path);
+    if (typeof value.count !== "number" || !Number.isInteger(value.count) || value.count < 1 || value.count > 10
+      || typeof value.sides !== "number" || !Number.isInteger(value.sides) || value.sides < 2 || value.sides > 100
+      || value.count * value.sides > 100) {
+      throw new MechanicsCompilationError("invalid_sanity_loss", "SAN dice loss must be bounded 1..10d2..100 with maximum total no greater than 100", undefined, path);
+    }
+    return { kind, count: value.count, sides: value.sides };
+  }
+  throw new MechanicsCompilationError("invalid_sanity_loss", `unsupported SAN loss kind: ${kind}`, undefined, `${path}.kind`);
+}
+
+/** Combat uses a finite numeric grammar, never free-form damage text. */
+function parseCombatDamageSpec(value: unknown, path: string): CombatDamageSpec {
+  if (!isRecord(value)) throw new MechanicsCompilationError("invalid_combat_damage", `expected combat damage object: ${path}`, undefined, path);
+  const kind = requiredString(value.kind, `${path}.kind`);
+  if (kind === "fixed") {
+    assertKeys(value, ["kind", "amount"], path);
+    if (typeof value.amount !== "number" || !Number.isInteger(value.amount) || value.amount < 1 || value.amount > 20) {
+      throw new MechanicsCompilationError("invalid_combat_damage", "fixed combat damage must be an integer from 1 to 20", undefined, `${path}.amount`);
+    }
+    return { kind, amount: value.amount };
+  }
+  if (kind === "dice") {
+    assertKeys(value, ["kind", "count", "sides"], path);
+    if (typeof value.count !== "number" || !Number.isInteger(value.count) || value.count < 1 || value.count > 3
+      || typeof value.sides !== "number" || !Number.isInteger(value.sides) || value.sides < 2 || value.sides > 10
+      || value.count * value.sides > 20) {
+      throw new MechanicsCompilationError("invalid_combat_damage", "combat dice damage must be bounded 1..3d2..10 with maximum total no greater than 20", undefined, path);
+    }
+    return { kind, count: value.count, sides: value.sides };
+  }
+  throw new MechanicsCompilationError("invalid_combat_damage", `unsupported combat damage kind: ${kind}`, undefined, `${path}.kind`);
 }
 
 function parseEffect(value: unknown, path: string): Effect {
@@ -167,6 +364,9 @@ function parseEffect(value: unknown, path: string): Effect {
     case "discover_clue":
       assertKeys(value, ["kind", "clueId"], path);
       return { kind, clueId: requiredString(value.clueId, `${path}.clueId`) };
+    case "acquire_item":
+      assertKeys(value, ["kind", "itemId"], path);
+      return { kind, itemId: requiredString(value.itemId, `${path}.itemId`) };
     case "set_state":
       assertKeys(value, ["kind", "stateKey", "value"], path);
       return { kind, stateKey: requiredString(value.stateKey, `${path}.stateKey`), value: scalar(value.value, `${path}.value`) };
@@ -176,6 +376,9 @@ function parseEffect(value: unknown, path: string): Effect {
     case "start_encounter":
       assertKeys(value, ["kind", "encounterId"], path);
       return { kind, encounterId: requiredString(value.encounterId, `${path}.encounterId`) };
+    case "sanity_check":
+      assertKeys(value, ["kind", "passLoss", "failLoss"], path);
+      return { kind, passLoss: parseSanityLossSpec(value.passLoss, `${path}.passLoss`), failLoss: parseSanityLossSpec(value.failLoss, `${path}.failLoss`) };
     case "reward":
       assertKeys(value, ["kind", "rewardId"], path);
       return { kind, rewardId: requiredString(value.rewardId, `${path}.rewardId`) };
@@ -206,6 +409,9 @@ function parsePredicate(value: unknown, path: string): Predicate {
     case "scene_visited":
       assertKeys(value, ["kind", "sceneId"], path);
       return { kind, sceneId: requiredString(value.sceneId, `${path}.sceneId`) };
+    case "current_scene":
+      assertKeys(value, ["kind", "sceneId"], path);
+      return { kind, sceneId: requiredString(value.sceneId, `${path}.sceneId`) };
     case "item_owned":
       assertKeys(value, ["kind", "itemId"], path);
       return { kind, itemId: requiredString(value.itemId, `${path}.itemId`) };
@@ -218,9 +424,66 @@ function parsePredicate(value: unknown, path: string): Predicate {
     case "npc_state":
       assertKeys(value, ["kind", "npcId", "state"], path);
       return { kind, npcId: requiredString(value.npcId, `${path}.npcId`), state: requiredString(value.state, `${path}.state`) };
+    case "encounter_defeated":
+      assertKeys(value, ["kind", "encounterId"], path);
+      return { kind, encounterId: requiredString(value.encounterId, `${path}.encounterId`) };
     default:
       throw new MechanicsCompilationError("invalid_schema", `unsupported predicate kind: ${kind}`, undefined, `${path}.kind`);
   }
+}
+
+function rewardPredicate(predicate: Predicate, path: string): RewardPredicate {
+  switch (predicate.kind) {
+    case "all":
+    case "any":
+      return { kind: predicate.kind, predicates: predicate.predicates.map((entry, index) => rewardPredicate(entry, `${path}.predicates[${index}]`)) };
+    case "not": return { kind: "not", predicate: rewardPredicate(predicate.predicate, `${path}.predicate`) };
+    case "clue_found": return predicate;
+    case "scene_visited": return predicate;
+    case "item_owned": return predicate;
+    case "current_scene":
+    case "connection_unlocked":
+    case "state_eq":
+    case "npc_state":
+    case "encounter_defeated":
+      throw new MechanicsCompilationError("invalid_reward_predicate", `reward condition uses unsupported predicate: ${predicate.kind}`, undefined, path);
+  }
+}
+
+function parseRewardSettlement(value: unknown, path: string): RewardSettlement {
+  if (!isRecord(value)) throw new MechanicsCompilationError("invalid_reward_settlement", `expected reward settlement object: ${path}`, undefined, path);
+  assertKeys(value, ["san", "cthulhuMythos", "reputation"], path);
+  const settlement: RewardSettlement = {};
+  if (value.san !== undefined) {
+    if (!isRecord(value.san)) throw new MechanicsCompilationError("invalid_reward_settlement", `expected SAN settlement object: ${path}.san`, undefined, `${path}.san`);
+    const kind = requiredString(value.san.kind, `${path}.san.kind`);
+    if (kind === "fixed") {
+      assertKeys(value.san, ["kind", "amount"], `${path}.san`);
+      const amount = value.san.amount;
+      if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 1 || amount > 100) throw new MechanicsCompilationError("invalid_reward_settlement", "SAN recovery must be a positive fixed amount no greater than 100", undefined, `${path}.san.amount`);
+      settlement.san = { kind, amount };
+    } else if (kind === "dice") {
+      assertKeys(value.san, ["kind", "count", "sides"], `${path}.san`);
+      const count = value.san.count;
+      const sides = value.san.sides;
+      if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > 100 || typeof sides !== "number" || !Number.isInteger(sides) || sides < 2 || sides > 100) {
+        throw new MechanicsCompilationError("invalid_reward_settlement", "SAN dice must be bounded positive NdM", undefined, `${path}.san`);
+      }
+      settlement.san = { kind, count, sides };
+    } else {
+      throw new MechanicsCompilationError("invalid_reward_settlement", "unsupported SAN settlement kind", undefined, `${path}.san.kind`);
+    }
+  }
+  for (const key of ["cthulhuMythos", "reputation"] as const) {
+    const amount = value[key];
+    if (amount === undefined) continue;
+    if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 1 || amount > 99) throw new MechanicsCompilationError("invalid_reward_settlement", `${key} must be a positive fixed amount no greater than 99`, undefined, `${path}.${key}`);
+    settlement[key] = amount;
+  }
+  if (!settlement.san && settlement.cthulhuMythos === undefined && settlement.reputation === undefined) {
+    throw new MechanicsCompilationError("invalid_reward_settlement", "reward settlement must grant SAN, Cthulhu Mythos, or reputation", undefined, path);
+  }
+  return settlement;
 }
 
 function parseCheck(value: unknown, path: string): CheckSpec {
@@ -242,11 +505,42 @@ function parseCheck(value: unknown, path: string): CheckSpec {
   return { kind, attribute: attribute as CheckSpec & { kind: "attribute" } extends { attribute: infer A } ? A : never, difficulty };
 }
 
+function parseActorEffectProvenance(value: unknown, path: string): ActorEffectProvenance[] {
+  if (!Array.isArray(value) || value.length === 0) throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actorEffectProvenance must be a non-empty array", undefined, path);
+  return value.map((entry, index) => {
+    const record = isRecord(entry) ? entry : (() => { throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect provenance must be an object", undefined, `${path}[${index}]`); })();
+    assertKeys(record, ["effectPath", "eventSlot", "source"], `${path}[${index}]`);
+    const effectPath = requiredString(record.effectPath, `${path}[${index}].effectPath`);
+    const event = isRecord(record.eventSlot) ? record.eventSlot : (() => { throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect eventSlot must be an object", undefined, `${path}[${index}].eventSlot`); })();
+    const source = isRecord(record.source) ? record.source : (() => { throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect source must be an object", undefined, `${path}[${index}].source`); })();
+    assertKeys(source, ["statementId", "quote"], `${path}[${index}].source`);
+    const statementId = requiredString(source.statementId, `${path}[${index}].source.statementId`);
+    const quote = requiredString(source.quote, `${path}[${index}].source.quote`);
+    if (quote !== quote.trim()) throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect quote must be trimmed", undefined, `${path}[${index}].source.quote`);
+    const kind = requiredString(event.kind, `${path}[${index}].eventSlot.kind`);
+    const rawEffectIndex = event.effectIndex;
+    if (!Number.isInteger(rawEffectIndex) || (rawEffectIndex as number) < 0) throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect index must be a non-negative integer", undefined, `${path}[${index}].eventSlot.effectIndex`);
+    const effectIndex = rawEffectIndex as number;
+    if (kind === "connection") {
+      assertKeys(event, ["kind", "connectionId", "outcome", "effectIndex"], `${path}[${index}].eventSlot`);
+      if (event.outcome !== "traverse") throw new MechanicsCompilationError("invalid_actor_effect_provenance", "connection actor effect must bind traverse", undefined, `${path}[${index}].eventSlot.outcome`);
+      return { effectPath, eventSlot: { kind, connectionId: requiredString(event.connectionId, `${path}[${index}].eventSlot.connectionId`), outcome: "traverse", effectIndex }, source: { statementId, quote } };
+    }
+    if (kind === "discovery") {
+      assertKeys(event, ["kind", "mechanismId", "outcome", "effectIndex"], `${path}[${index}].eventSlot`);
+      const outcome = requiredString(event.outcome, `${path}[${index}].eventSlot.outcome`);
+      if (outcome !== "success" && outcome !== "failure" && outcome !== "failback") throw new MechanicsCompilationError("invalid_actor_effect_provenance", "discovery actor effect has invalid outcome", undefined, `${path}[${index}].eventSlot.outcome`);
+      return { effectPath, eventSlot: { kind, mechanismId: requiredString(event.mechanismId, `${path}[${index}].eventSlot.mechanismId`), outcome, effectIndex }, source: { statementId, quote } };
+    }
+    throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect eventSlot has invalid kind", undefined, `${path}[${index}].eventSlot.kind`);
+  });
+}
+
 export function parseMechanicsCandidateSpec(value: unknown): MechanicsCandidateSpec {
   if (!isRecord(value)) throw new MechanicsCompilationError("invalid_schema", "mechanics candidate must be an object");
   const kind = requiredString(value.kind, "claim.value.kind");
   if (kind === "discovery_method") {
-    assertKeys(value, ["kind", "id", "clueId", "action", "target", "targetId", "availability", "check", "onSuccess", "onFailure", "failback"], "claim.value");
+    assertKeys(value, ["kind", "id", "clueId", "action", "target", "targetId", "availability", "check", "onSuccess", "onFailure", "failback", "actorEffectProvenance"], "claim.value");
     const action = requiredString(value.action, "claim.value.action");
     const target = requiredString(value.target, "claim.value.target");
     if (!(["observe", "search", "talk", "read", "use_item", "move", "custom"] as string[]).includes(action)) throw new MechanicsCompilationError("invalid_schema", "unsupported discovery action", undefined, "claim.value.action");
@@ -264,16 +558,18 @@ export function parseMechanicsCandidateSpec(value: unknown): MechanicsCandidateS
       onSuccess: requiredEffects(value.onSuccess, "claim.value.onSuccess"),
       ...(value.onFailure === undefined ? {} : { onFailure: requiredEffects(value.onFailure, "claim.value.onFailure") }),
       ...(failback ? { failback } : {}),
+      ...(value.actorEffectProvenance === undefined ? {} : { actorEffectProvenance: parseActorEffectProvenance(value.actorEffectProvenance, "claim.value.actorEffectProvenance") }),
     };
   }
   if (kind === "connection_gate") {
-    assertKeys(value, ["kind", "id", "connectionId", "availability", "onTraverse"], "claim.value");
+    assertKeys(value, ["kind", "id", "connectionId", "availability", "onTraverse", "actorEffectProvenance"], "claim.value");
     return {
       kind,
       id: requiredString(value.id, "claim.value.id"),
       connectionId: requiredString(value.connectionId, "claim.value.connectionId"),
       ...(value.availability === undefined ? {} : { availability: parsePredicate(value.availability, "claim.value.availability") }),
       ...(value.onTraverse === undefined ? {} : { onTraverse: requiredEffects(value.onTraverse, "claim.value.onTraverse") }),
+      ...(value.actorEffectProvenance === undefined ? {} : { actorEffectProvenance: parseActorEffectProvenance(value.actorEffectProvenance, "claim.value.actorEffectProvenance") }),
     };
   }
   if (kind === "state_transition") {
@@ -284,6 +580,45 @@ export function parseMechanicsCandidateSpec(value: unknown): MechanicsCandidateS
     assertKeys(value, ["kind", "id", "priority", "when", "effects"], "claim.value");
     if (typeof value.priority !== "number" || !Number.isInteger(value.priority)) throw new MechanicsCompilationError("invalid_schema", "ending priority must be an integer", undefined, "claim.value.priority");
     return { kind, id: requiredString(value.id, "claim.value.id"), priority: value.priority, when: parsePredicate(value.when, "claim.value.when"), effects: requiredEffects(value.effects, "claim.value.effects") };
+  }
+  if (kind === "encounter_definition") {
+    assertKeys(value, ["kind", "id", "encounterId", "sceneId", "combatantId", "maxHp", "dodge", "fight", "npcDamage", "victoryEffects"], "claim.value");
+    const maxHp = value.maxHp;
+    const dodge = value.dodge;
+    const fight = value.fight;
+    if (typeof maxHp !== "number" || !Number.isInteger(maxHp) || maxHp < 1 || maxHp > 20) {
+      throw new MechanicsCompilationError("invalid_encounter", "encounter maxHp must be an integer from 1 to 20", undefined, "claim.value.maxHp");
+    }
+    if (typeof dodge !== "number" || !Number.isInteger(dodge) || dodge < 0 || dodge > 100) {
+      throw new MechanicsCompilationError("invalid_encounter", "encounter dodge must be an integer percentage from 0 to 100", undefined, "claim.value.dodge");
+    }
+    if (typeof fight !== "number" || !Number.isInteger(fight) || fight < 0 || fight > 100) {
+      throw new MechanicsCompilationError("invalid_encounter", "encounter fight must be an integer percentage from 0 to 100", undefined, "claim.value.fight");
+    }
+    const id = requiredString(value.id, "claim.value.id");
+    const encounterId = requiredString(value.encounterId, "claim.value.encounterId");
+    if (id !== encounterId) throw new MechanicsCompilationError("invalid_encounter", "encounter definition id must equal encounterId", undefined, "claim.value.id");
+    return {
+      kind,
+      id,
+      encounterId,
+      sceneId: requiredString(value.sceneId, "claim.value.sceneId"),
+      combatantId: requiredString(value.combatantId, "claim.value.combatantId"),
+      maxHp,
+      dodge,
+      fight,
+      npcDamage: parseCombatDamageSpec(value.npcDamage, "claim.value.npcDamage"),
+      victoryEffects: value.victoryEffects === undefined ? [] : requiredEffects(value.victoryEffects, "claim.value.victoryEffects", true),
+    };
+  }
+  if (kind === "reward_definition") {
+    assertKeys(value, ["kind", "id", "when", "settlement"], "claim.value");
+    return {
+      kind,
+      id: requiredString(value.id, "claim.value.id"),
+      when: rewardPredicate(parsePredicate(value.when, "claim.value.when"), "claim.value.when"),
+      settlement: parseRewardSettlement(value.settlement, "claim.value.settlement"),
+    };
   }
   throw new MechanicsCompilationError("invalid_schema", `unsupported mechanics kind: ${kind}`, undefined, "claim.value.kind");
 }
@@ -334,7 +669,9 @@ type CompiledNode =
   | { kind: "discovery_method"; node: DiscoveryMethodIR }
   | { kind: "connection_gate"; node: ConnectionGateIR }
   | { kind: "state_transition"; node: StateTransitionIR }
-  | { kind: "ending_rule"; node: EndingRuleIR };
+  | { kind: "ending_rule"; node: EndingRuleIR }
+  | { kind: "encounter_definition"; node: EncounterDefinitionIR }
+  | { kind: "reward_definition"; node: RewardDefinitionIR };
 
 function compileSpec(spec: MechanicsCandidateSpec, interpretationId: string): CompiledNode {
   const sourceInterpretationIds = [interpretationId];
@@ -343,6 +680,11 @@ function compileSpec(spec: MechanicsCandidateSpec, interpretationId: string): Co
     case "connection_gate": return { kind: spec.kind, node: { ...spec, sourceInterpretationIds } };
     case "state_transition": return { kind: spec.kind, node: { ...spec, sourceInterpretationIds } };
     case "ending_rule": return { kind: spec.kind, node: { ...spec, sourceInterpretationIds } };
+    case "encounter_definition": {
+      const { kind: _kind, ...definition } = spec;
+      return { kind: spec.kind, node: { ...definition, sourceInterpretationIds } };
+    }
+    case "reward_definition": return { kind: spec.kind, node: { ...spec, sourceInterpretationIds } };
   }
 }
 
@@ -378,11 +720,33 @@ function eligibleInterpretation(graph: SourceFactGraph, interpretationId: string
   return interpretation;
 }
 
+function validateActorEffectProvenanceSource(graph: SourceFactGraph, interpretation: FactInterpretationCandidate, spec: MechanicsCandidateSpec): void {
+  const provenance = spec.kind === "connection_gate" || spec.kind === "discovery_method"
+    ? spec.actorEffectProvenance ?? []
+    : [];
+  for (const [index, binding] of provenance.entries()) {
+    const path = `claim.value.actorEffectProvenance[${index}].source`;
+    if (!interpretation.sourceStatementIds.includes(binding.source.statementId)) {
+      throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect source statement is outside its interpretation evidence", interpretation.id, path, interpretation.sourceStatementIds);
+    }
+    const statement = graph.statements.find((candidate) => candidate.id === binding.source.statementId);
+    if (!statement) {
+      throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect source statement is missing from SourceFactGraph", interpretation.id, path, interpretation.sourceStatementIds);
+    }
+    const first = statement.text.indexOf(binding.source.quote);
+    if (first < 0 || first !== statement.text.lastIndexOf(binding.source.quote)) {
+      throw new MechanicsCompilationError("invalid_actor_effect_provenance", "actor effect quote must be a unique exact source substring", interpretation.id, `${path}.quote`, interpretation.sourceStatementIds);
+    }
+  }
+}
+
 /** Audit a candidate without validating references against the final runtime symbols. */
 export function validateMechanicsCandidate(graph: SourceFactGraph, interpretationId: string, input: Pick<MechanicsCompilationInput, "moduleId" | "compilationMode" | "allowedEnginePolicyIds">): MechanicsCandidateSpec {
   const interpretation = eligibleInterpretation(graph, interpretationId, input);
   try {
-    return parseMechanicsCandidateSpec(interpretation.claim.value);
+    const spec = parseMechanicsCandidateSpec(interpretation.claim.value);
+    validateActorEffectProvenanceSource(graph, interpretation, spec);
+    return spec;
   } catch (error) {
     if (error instanceof MechanicsCompilationError) throw new MechanicsCompilationError(error.code, error.reason, interpretation.id, error.path ?? interpretation.claim.path, interpretation.sourceStatementIds);
     throw error;
@@ -414,10 +778,12 @@ export function compileMechanics(graph: SourceFactGraph, input: MechanicsCompila
     connections: nodes.filter((node): node is Extract<CompiledNode, { kind: "connection_gate" }> => node.kind === "connection_gate").map((node) => node.node).sort((left, right) => left.id.localeCompare(right.id)),
     transitions: nodes.filter((node): node is Extract<CompiledNode, { kind: "state_transition" }> => node.kind === "state_transition").map((node) => node.node).sort((left, right) => left.id.localeCompare(right.id)),
     endings: nodes.filter((node): node is Extract<CompiledNode, { kind: "ending_rule" }> => node.kind === "ending_rule").map((node) => node.node).sort((left, right) => left.id.localeCompare(right.id)),
+    encounterDefinitions: nodes.filter((node): node is Extract<CompiledNode, { kind: "encounter_definition" }> => node.kind === "encounter_definition").map((node) => node.node).sort((left, right) => left.encounterId.localeCompare(right.encounterId)),
+    rewards: nodes.filter((node): node is Extract<CompiledNode, { kind: "reward_definition" }> => node.kind === "reward_definition").map((node) => node.node).sort((left, right) => left.id.localeCompare(right.id)),
   };
   validateMechanicsStructure(ir);
   if (input.requiredMechanicIds) {
-    const compiled = new Set([...ir.discoveryMethods, ...ir.connections, ...ir.transitions, ...ir.endings].map((node) => node.id));
+    const compiled = new Set([...ir.discoveryMethods, ...ir.connections, ...ir.transitions, ...ir.endings, ...ir.encounterDefinitions, ...ir.rewards].map((node) => node.id));
     for (const id of input.requiredMechanicIds) if (!compiled.has(id)) throw new MechanicsCompilationError("missing_required_mechanic", `required mechanic is missing: ${id}`);
   }
   const mechanicsHash = sha256(canonical({ ...ir, mechanicsHash: undefined }));
@@ -440,19 +806,34 @@ function validatePredicate(predicate: Predicate, symbols: MechanicsSymbols): voi
     case "not": validatePredicate(predicate.predicate, symbols); return;
     case "clue_found": assertKnown(predicate.clueId, symbols.clueIds, "clue"); return;
     case "scene_visited": assertKnown(predicate.sceneId, symbols.sceneIds, "scene"); return;
+    case "current_scene": assertKnown(predicate.sceneId, symbols.sceneIds, "scene"); return;
     case "item_owned": assertKnown(predicate.itemId, symbols.itemIds, "item"); return;
     case "connection_unlocked": assertKnown(predicate.connectionId, symbols.connectionIds, "connection"); return;
     case "state_eq": assertKnown(predicate.stateKey, symbols.declaredStateKeys, "state key"); return;
     case "npc_state": assertKnown(predicate.npcId, symbols.npcIds, "npc"); return;
+    case "encounter_defeated": assertKnown(predicate.encounterId, symbols.encounterIds, "encounter"); return;
   }
 }
 
-function validateEffects(effects: readonly Effect[], symbols: MechanicsSymbols, allowEndGame: boolean): void {
-  if (effects.length === 0) throw new MechanicsCompilationError("invalid_effect", "effects must not be empty");
+function validateCombatDamageSpec(spec: CombatDamageSpec): void {
+  if (spec.kind === "fixed") {
+    if (!Number.isInteger(spec.amount) || spec.amount < 1 || spec.amount > 20) throw new MechanicsCompilationError("invalid_combat_damage", "invalid fixed combat damage");
+    return;
+  }
+  if (!Number.isInteger(spec.count) || spec.count < 1 || spec.count > 3 || !Number.isInteger(spec.sides) || spec.sides < 2 || spec.sides > 10 || spec.count * spec.sides > 20) {
+    throw new MechanicsCompilationError("invalid_combat_damage", "invalid combat dice damage");
+  }
+}
+
+function validateEffects(effects: readonly Effect[], symbols: MechanicsSymbols, allowEndGame: boolean, allowActorEffects: boolean, allowEmpty = false): void {
+  if (effects.length === 0 && !allowEmpty) throw new MechanicsCompilationError("invalid_effect", "effects must not be empty");
+  if (effects.length > 100) throw new MechanicsCompilationError("invalid_effect", "too many effects in one player/automatic branch");
   const writes = new Map<string, string>();
+  let maximumActorLoss = 0;
   for (const effect of effects) {
     switch (effect.kind) {
       case "discover_clue": assertKnown(effect.clueId, symbols.clueIds, "clue"); break;
+      case "acquire_item": assertKnown(effect.itemId, symbols.itemIds, "item"); break;
       case "set_state": {
         assertKnown(effect.stateKey, symbols.declaredStateKeys, "state key");
         const previous = writes.get(effect.stateKey);
@@ -463,12 +844,44 @@ function validateEffects(effects: readonly Effect[], symbols: MechanicsSymbols, 
       }
       case "unlock_connection": assertKnown(effect.connectionId, symbols.connectionIds, "connection"); break;
       case "start_encounter": assertKnown(effect.encounterId, symbols.encounterIds, "encounter"); break;
-      case "reward": assertKnown(effect.rewardId, symbols.rewardIds, "reward"); break;
+      case "sanity_check":
+        if (!allowActorEffects) throw new MechanicsCompilationError("invalid_actor_effect", "sanity_check is only allowed in a discovery action branch or connection traversal", undefined);
+        // Parsed IR can be supplied directly to validateMechanicsIR, so retain the
+        // same fail-closed bounds independently of the JSON parser.
+        for (const [label, loss] of [["passLoss", effect.passLoss], ["failLoss", effect.failLoss]] as const) {
+          if (loss.kind === "fixed") {
+            if (!Number.isInteger(loss.amount) || loss.amount < 0 || loss.amount > 100) throw new MechanicsCompilationError("invalid_sanity_loss", `invalid ${label} fixed SAN loss`);
+          } else if (!Number.isInteger(loss.count) || loss.count < 1 || loss.count > 10 || !Number.isInteger(loss.sides) || loss.sides < 2 || loss.sides > 100 || loss.count * loss.sides > 100) {
+            throw new MechanicsCompilationError("invalid_sanity_loss", `invalid ${label} SAN dice loss`);
+          }
+        }
+        maximumActorLoss += Math.max(
+          effect.passLoss.kind === "fixed" ? effect.passLoss.amount : effect.passLoss.count * effect.passLoss.sides,
+          effect.failLoss.kind === "fixed" ? effect.failLoss.amount : effect.failLoss.count * effect.failLoss.sides,
+        );
+        break;
+      case "reward":
+        throw new MechanicsCompilationError("invalid_reward_effect", "reward effects are not supported; declare a source-bound reward_definition instead");
       case "end_game":
         if (!allowEndGame) throw new MechanicsCompilationError("invalid_end_game", "end_game is only allowed in an ending or explicit terminal transition");
         assertKnown(effect.endingId, symbols.endingIds, "ending");
         break;
     }
+  }
+  if (maximumActorLoss > 100) throw new MechanicsCompilationError("invalid_sanity_loss", "one player action cannot declare more than 100 possible SAN loss");
+}
+
+function validateRewardPredicate(predicate: RewardPredicate, symbols: MechanicsSymbols): void {
+  switch (predicate.kind) {
+    case "all":
+    case "any":
+      if (predicate.predicates.length === 0) throw new MechanicsCompilationError("invalid_reward_predicate", `empty ${predicate.kind} reward predicate`);
+      predicate.predicates.forEach((entry) => validateRewardPredicate(entry, symbols));
+      return;
+    case "not": validateRewardPredicate(predicate.predicate, symbols); return;
+    case "clue_found": assertKnown(predicate.clueId, symbols.clueIds, "clue"); return;
+    case "scene_visited": assertKnown(predicate.sceneId, symbols.sceneIds, "scene"); return;
+    case "item_owned": assertKnown(predicate.itemId, symbols.itemIds, "item"); return;
   }
 }
 
@@ -478,35 +891,85 @@ function validateSourceIds(ids: readonly string[], available: readonly string[])
   for (const id of ids) assertKnown(id, available, "source interpretation");
 }
 
+type ActorEffectBranch = { outcome: "success" | "failure" | "failback" | "traverse"; path: "onSuccess" | "onFailure" | "failback.effects" | "onTraverse"; effects: readonly Effect[] };
+
+function validateActorEffectProvenance(
+  mechanic: Pick<DiscoveryMethodIR, "id" | "onSuccess" | "onFailure" | "failback" | "actorEffectProvenance"> | Pick<ConnectionGateIR, "id" | "connectionId" | "onTraverse" | "actorEffectProvenance">,
+): void {
+  const connection = "connectionId" in mechanic;
+  const branches: ActorEffectBranch[] = connection
+    ? [{ outcome: "traverse", path: "onTraverse", effects: mechanic.onTraverse ?? [] }]
+    : [
+      { outcome: "success", path: "onSuccess", effects: mechanic.onSuccess },
+      { outcome: "failure", path: "onFailure", effects: mechanic.onFailure ?? [] },
+      { outcome: "failback", path: "failback.effects", effects: mechanic.failback?.effects ?? [] },
+    ];
+  const slots = branches.flatMap((branch) => branch.effects.flatMap((effect, effectIndex) => effect.kind === "sanity_check"
+    ? [{ branch, effectIndex, effectPath: `${branch.path}[${effectIndex}]` }]
+    : []));
+  const provenance = mechanic.actorEffectProvenance;
+  if (slots.length === 0) {
+    if (provenance !== undefined) throw new MechanicsCompilationError("invalid_actor_effect_provenance", `mechanic ${mechanic.id} has SAN provenance without a SAN effect`);
+    return;
+  }
+  if (!provenance || provenance.length !== slots.length) throw new MechanicsCompilationError("missing_actor_effect_provenance", `every SAN effect slot requires exactly one actor provenance binding: ${mechanic.id}`);
+  const bound = new Set<string>();
+  for (const binding of provenance) {
+    const slot = slots.find((candidate) => candidate.branch.outcome === binding.eventSlot.outcome && candidate.effectIndex === binding.eventSlot.effectIndex);
+    if (!slot || binding.effectPath !== slot.effectPath) {
+      throw new MechanicsCompilationError("invalid_actor_effect_provenance", `actor effect provenance does not name an exact SAN slot: ${mechanic.id}`);
+    }
+    if (connection) {
+      if (binding.eventSlot.kind !== "connection" || binding.eventSlot.connectionId !== mechanic.connectionId || binding.eventSlot.outcome !== "traverse") {
+        throw new MechanicsCompilationError("invalid_actor_effect_provenance", `actor effect provenance does not match connection traversal: ${mechanic.id}`);
+      }
+    } else if (binding.eventSlot.kind !== "discovery" || binding.eventSlot.mechanismId !== mechanic.id) {
+      throw new MechanicsCompilationError("invalid_actor_effect_provenance", `actor effect provenance does not match discovery branch: ${mechanic.id}`);
+    }
+    const key = `${binding.eventSlot.kind}:${binding.eventSlot.outcome}:${binding.eventSlot.effectIndex}`;
+    if (bound.has(key)) throw new MechanicsCompilationError("invalid_actor_effect_provenance", `actor effect provenance duplicates a SAN slot: ${mechanic.id}`);
+    bound.add(key);
+  }
+}
+
 function validateMechanicsStructure(ir: MechanicsIR): void {
+  assertKeys(ir as unknown as RecordValue, ["schemaVersion", "moduleId", "documentHash", "sourceGraphIdentity", "mechanicsHash", "symbols", "sourceInterpretationIds", "discoveryMethods", "connections", "transitions", "endings", "encounterDefinitions", "rewards"], "mechanicsIR");
   if (ir.schemaVersion !== MECHANICS_IR_SCHEMA_VERSION) throw new MechanicsCompilationError("schema_mismatch", `unsupported mechanics schema: ${ir.schemaVersion}`);
   if (!ir.moduleId.trim() || !ir.sourceGraphIdentity || !/^[a-f0-9]{64}$/.test(ir.sourceGraphIdentity)) throw new MechanicsCompilationError("invalid_identity", "invalid mechanics identity");
   const symbols = normalizeSymbols(ir.symbols);
   const sourceIds = [...ir.sourceInterpretationIds];
   assertUnique(sourceIds, "source interpretation id");
-  const allNodes = [...ir.discoveryMethods, ...ir.connections, ...ir.transitions, ...ir.endings];
+  const allNodes = [...ir.discoveryMethods, ...ir.connections, ...ir.transitions, ...ir.endings, ...ir.encounterDefinitions, ...ir.rewards];
   const nodeIds = allNodes.map((node) => node.id);
   assertUnique(nodeIds, "mechanism id");
   for (const discovery of ir.discoveryMethods) {
     assertKnown(discovery.clueId, symbols.clueIds, "clue");
     assertKnown(discovery.targetId, discovery.target === "clue" ? symbols.clueIds : discovery.target === "item" ? symbols.itemIds : discovery.target === "npc" ? symbols.npcIds : symbols.sceneIds, `${discovery.target} target`);
+    if ((discovery.action === "talk") !== (discovery.target === "npc")) {
+      throw new MechanicsCompilationError("invalid_discovery_actor", "talk discovery actions must target NPCs, and NPC discoveries must use talk", undefined);
+    }
     if (!discovery.onSuccess.some((effect) => effect.kind === "discover_clue" && effect.clueId === discovery.clueId)) throw new MechanicsCompilationError("missing_discovery_effect", `discovery method must discover its clue: ${discovery.id}`);
+    if (discovery.target === "item" && !discovery.onSuccess.some((effect) => effect.kind === "acquire_item" && effect.itemId === discovery.targetId)) {
+      throw new MechanicsCompilationError("missing_item_acquire_effect", `item discovery must acquire its target item: ${discovery.id}`);
+    }
     if (discovery.availability) validatePredicate(discovery.availability, symbols);
-    if (discovery.onFailure) validateEffects(discovery.onFailure, symbols, false);
-    if (discovery.failback) validateEffects(discovery.failback.effects, symbols, false);
-    validateEffects(discovery.onSuccess, symbols, false);
+    if (discovery.onFailure) validateEffects(discovery.onFailure, symbols, false, true);
+    if (discovery.failback) validateEffects(discovery.failback.effects, symbols, false, true);
+    validateEffects(discovery.onSuccess, symbols, false, true);
+    validateActorEffectProvenance(discovery);
     validateSourceIds(discovery.sourceInterpretationIds, sourceIds);
   }
   for (const connection of ir.connections) {
     assertKnown(connection.connectionId, symbols.connectionIds, "connection");
     if (connection.availability) validatePredicate(connection.availability, symbols);
-    if (connection.onTraverse) validateEffects(connection.onTraverse, symbols, false);
+    if (connection.onTraverse) validateEffects(connection.onTraverse, symbols, false, true);
+    validateActorEffectProvenance(connection);
     validateSourceIds(connection.sourceInterpretationIds, sourceIds);
   }
   assertUnique(ir.connections.map((connection) => connection.connectionId), "connection gate");
   for (const transition of ir.transitions) {
     validatePredicate(transition.when, symbols);
-    validateEffects(transition.effects, symbols, true);
+    validateEffects(transition.effects, symbols, true, false);
     validateSourceIds(transition.sourceInterpretationIds, sourceIds);
   }
   const priorities = new Set<number>();
@@ -514,10 +977,38 @@ function validateMechanicsStructure(ir: MechanicsIR): void {
     if (priorities.has(ending.priority)) throw new MechanicsCompilationError("duplicate_ending_priority", `duplicate ending priority: ${ending.priority}`);
     priorities.add(ending.priority);
     validatePredicate(ending.when, symbols);
-    validateEffects(ending.effects, symbols, true);
+    validateEffects(ending.effects, symbols, true, false);
     const endGames = ending.effects.filter((effect) => effect.kind === "end_game");
     if (endGames.length !== 1) throw new MechanicsCompilationError("invalid_ending_rule", `ending rule must declare exactly one end_game effect: ${ending.id}`);
     validateSourceIds(ending.sourceInterpretationIds, sourceIds);
+  }
+  const encounterIds = ir.encounterDefinitions.map((definition) => definition.encounterId);
+  assertUnique(encounterIds, "encounter definition");
+  if (encounterIds.length !== symbols.encounterIds.length || encounterIds.some((id) => !symbols.encounterIds.includes(id)) || symbols.encounterIds.some((id) => !encounterIds.includes(id))) {
+    throw new MechanicsCompilationError("encounter_catalog_mismatch", "encounter symbols and source-bound encounter definitions must match exactly");
+  }
+  for (const definition of ir.encounterDefinitions) {
+    assertKeys(definition as unknown as RecordValue, ["id", "encounterId", "sceneId", "combatantId", "maxHp", "dodge", "fight", "npcDamage", "victoryEffects", "sourceInterpretationIds"], `encounterDefinitions.${definition.encounterId}`);
+    if (definition.id !== definition.encounterId) throw new MechanicsCompilationError("invalid_encounter", "encounter definition id must equal encounterId");
+    assertKnown(definition.sceneId, symbols.sceneIds, "encounter scene");
+    assertKnown(definition.combatantId, symbols.npcIds, "encounter combatant");
+    if (!Number.isInteger(definition.maxHp) || definition.maxHp < 1 || definition.maxHp > 20) throw new MechanicsCompilationError("invalid_encounter", "encounter maxHp must be an integer from 1 to 20");
+    if (!Number.isInteger(definition.dodge) || definition.dodge < 0 || definition.dodge > 100 || !Number.isInteger(definition.fight) || definition.fight < 0 || definition.fight > 100) {
+      throw new MechanicsCompilationError("invalid_encounter", "encounter dodge and fight must be integer percentages from 0 to 100");
+    }
+    validateCombatDamageSpec(definition.npcDamage);
+    validateEffects(definition.victoryEffects, symbols, false, false, true);
+    if (definition.victoryEffects.some((effect) => effect.kind === "start_encounter")) throw new MechanicsCompilationError("invalid_encounter", "victory effects cannot start another encounter");
+    validateSourceIds(definition.sourceInterpretationIds, sourceIds);
+  }
+  const rewardIds = ir.rewards.map((reward) => reward.id);
+  assertUnique(rewardIds, "reward definition");
+  if (rewardIds.length !== symbols.rewardIds.length || rewardIds.some((id) => !symbols.rewardIds.includes(id)) || symbols.rewardIds.some((id) => !rewardIds.includes(id))) {
+    throw new MechanicsCompilationError("reward_catalog_mismatch", "reward symbols and source-bound reward definitions must match exactly");
+  }
+  for (const reward of ir.rewards) {
+    validateRewardPredicate(reward.when, symbols);
+    validateSourceIds(reward.sourceInterpretationIds, sourceIds);
   }
 }
 

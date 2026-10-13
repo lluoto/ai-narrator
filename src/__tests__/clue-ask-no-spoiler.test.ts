@@ -12,6 +12,7 @@
 import { describe, it, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
 import { BARN_OF_PREMIER } from "../module/barn-of-premier";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
@@ -25,6 +26,7 @@ function makeSession(id: string): GameSession & Record<string, any> {
 }
 
 const controlRoom = BARN_OF_PREMIER.scenes.find((s) => s.id === "中控室")!;
+const maintenanceRoom = BARN_OF_PREMIER.scenes.find((s) => s.id === "维修间")!;
 
 describe("歧义回问不含任何未发现线索的名字", () => {
   it("端到端：真实的中控室歧义（陆川去翻中控室的储物柜）触发回问，回问文本不含任何候选的 id/展示名", async () => {
@@ -48,29 +50,17 @@ describe("歧义回问不含任何未发现线索的名字", () => {
     expect(text).toContain("不止一样东西");
   });
 
-  it("合成场景（两条人工构造的歧义线索）同样不泄露展示名", async () => {
-    const session = makeSession(`ask-no-spoiler-synth-${Math.random()}`);
+  it("端到端：真实维修间的歧义同样不泄露展示名", async () => {
+    const session = makeSession(`ask-no-spoiler-maintenance-${Math.random()}`);
     await session.act("加载模组 普瑞米尔的谷仓");
-    const investigation: any = session.investigation;
-    investigation.addClueType("clue_syn_a", {
-      description: "测试线索甲", scene: "特里坎家",
-      matchTexts: ["测试甲", "检查桌子上的东西"],
-      displayName: "桌上的东西",
-      coc_primary: { skill: "spot_hidden", regular: "甲的揭示文本", fail: "没找到" },
-    });
-    investigation.addClueType("clue_syn_b", {
-      description: "测试线索乙", scene: "特里坎家",
-      matchTexts: ["测试乙", "检查桌子下面的箱子"],
-      displayName: "桌下的箱子",
-      coc_primary: { skill: "spot_hidden", regular: "乙的揭示文本", fail: "没找到" },
-    });
+    expect(activateRegisteredGameSessionSceneForTest(session, "维修间")).toBe(true);
 
-    const res = await session.act("检查桌子", "p1");
+    const res = await session.act("打开那口像冰箱一样的棺材", "p1");
     const text = res.events.map((e) => e.content).join("\n");
-    expect(text).not.toContain("桌上的东西");
-    expect(text).not.toContain("桌下的箱子");
-    expect(text).not.toContain("clue_syn_a");
-    expect(text).not.toContain("clue_syn_b");
+    for (const clue of maintenanceRoom.clues) {
+      expect(text).not.toContain(clue.id);
+      expect(text).not.toContain(clue.name);
+    }
     expect(text).toContain("不止一样东西");
   });
 });

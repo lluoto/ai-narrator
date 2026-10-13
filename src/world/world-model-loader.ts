@@ -3,6 +3,7 @@
 // 向后兼容 integrator 的 queryCausal/queryBehavior/getFactionRelations 接口
 
 import { readFileSync, existsSync } from "fs";
+import { resolve } from "node:path";
 import { log } from "../log";
 
 // ============================================================
@@ -10,33 +11,33 @@ import { log } from "../log";
 // ============================================================
 
 export interface V18Entry {
-  type: string;
-  name?: string;
-  description?: string;
-  chapter: string;
-  novel?: string;
-  _version?: string;           // "v15+v16" | "v16" | "v17"
+  readonly type: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly chapter: string;
+  readonly novel?: string;
+  readonly _version?: string;           // "v15+v16" | "v16" | "v17"
 
   // v15+v16: 原始世界观
-  quote_abridged?: string;
-  quote_source?: string;
-  properties?: Record<string, string>;
-  source?: string;
-  hallucination_risk?: boolean;
-  causal_precheck?: Record<string, any>;
+  readonly quote_abridged?: string;
+  readonly quote_source?: string;
+  readonly properties?: Readonly<Record<string, string>>;
+  readonly source?: string;
+  readonly hallucination_risk?: boolean;
+  readonly causal_precheck?: Readonly<Record<string, unknown>>;
 
   // v16: D&D 映射
-  mechanic?: string;
-  game_rule?: boolean | string;
-  dnd_mapping?: string;
+  readonly mechanic?: string;
+  readonly game_rule?: boolean | string;
+  readonly dnd_mapping?: string;
 
   // v17: 行为/因果
-  trigger?: string;
-  response?: string;
-  world_fit?: number;
+  readonly trigger?: string;
+  readonly response?: string;
+  readonly world_fit?: number;
 
   // 保留原始字段
-  [key: string]: unknown;
+  readonly [key: string]: unknown;
 }
 
 // ============================================================
@@ -55,9 +56,12 @@ interface WorldModelStats {
 
 // 向后兼容的查询返回（集成层仍用）
 interface ScoredEntry {
-  entry: V18Entry;
-  score: number;
+  readonly entry: V18Entry;
+  readonly score: number;
 }
+
+type EntryList = readonly V18Entry[];
+const EMPTY_ENTRY_LIST: EntryList = Object.freeze([] as V18Entry[]);
 
 // ============================================================
 // 加载器
@@ -74,10 +78,16 @@ export const DEFAULT_V18_PATH =
 
 /** 克苏鲁子模型，同样可覆盖 */
 export const DEFAULT_CTHULHU_PATH =
-  process.env.CTHULHU_MODEL_PATH ?? "../世界模型/cthulhu_extracted/cthulhu_world_model.jsonl";
+  process.env.CTHULHU_MODEL_PATH ?? "../世界模型/datasets/cthulhu/extracted/cthulhu_world_model.jsonl";
 
 /** 按路径共享的 loader 实例。世界模型是只读参考数据，没有按会话变化的内容。 */
 const SHARED = new Map<string, WorldModelLoader>();
+/**
+ * A shared loader represents exactly the resource selected by its factory key.
+ * Keep that authority module-private: standalone WorldModelLoader instances
+ * intentionally retain their explicit reload/replacement contract.
+ */
+const SHARED_SOURCE_KEYS = new WeakMap<WorldModelLoader, string>();
 
 /**
  * 取得进程内共享的世界模型 loader。
@@ -91,22 +101,24 @@ const SHARED = new Map<string, WorldModelLoader>();
  * 只读。调用方一律用 `isLoaded()` 守卫后再 load()，因此第二个使用者不会重复加载。
  */
 export function sharedWorldModel(path: string = DEFAULT_V18_PATH): WorldModelLoader {
-  const existing = SHARED.get(path);
+  const key = sharedPathKey(path);
+  const existing = SHARED.get(key);
   if (existing) return existing;
   const created = new WorldModelLoader();
-  SHARED.set(path, created);
+  SHARED.set(key, created);
+  SHARED_SOURCE_KEYS.set(created, key);
   return created;
 }
 
 export class WorldModelLoader {
-  private entries: V18Entry[] = [];
-  private byNovel: Map<string, V18Entry[]> = new Map();
-  private byType: Map<string, V18Entry[]> = new Map();
-  private byNovelAndType: Map<string, V18Entry[]> = new Map();
-  private byVersion: Map<string, V18Entry[]> = new Map();
-  private dndGameRules: V18Entry[] = [];
-  private dndMappings: V18Entry[] = [];
-  private hallucinationRisky: V18Entry[] = [];
+  private entries: EntryList = EMPTY_ENTRY_LIST;
+  private byNovel: Map<string, EntryList> = new Map();
+  private byType: Map<string, EntryList> = new Map();
+  private byNovelAndType: Map<string, EntryList> = new Map();
+  private byVersion: Map<string, EntryList> = new Map();
+  private dndGameRules: EntryList = EMPTY_ENTRY_LIST;
+  private dndMappings: EntryList = EMPTY_ENTRY_LIST;
+  private hallucinationRisky: EntryList = EMPTY_ENTRY_LIST;
   private loaded = false;
   private loadTime = 0;
 
@@ -115,54 +127,108 @@ export class WorldModelLoader {
    * @param path JSONL 文件路径
    */
   load(path: string = DEFAULT_V18_PATH) {
+    const pinnedSourceKey = SHARED_SOURCE_KEYS.get(this);
+    if (pinnedSourceKey !== undefined && sharedPathKey(path) !== pinnedSourceKey) {
+      // Do this before any filesystem observation or state clear. A process
+      // shared reference bucket may be read by many legacy sessions, so one
+      // host cannot retarget it to a different resource behind their facades.
+      throw new Error("shared world-model loader is pinned to its source");
+    }
     if (!existsSync(path)) {
+      this.clear();
       log.warn("world", `世界模型文件未找到: ${path}`);
       return;
     }
 
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf-8");
+    } catch (error) {
+      this.clear();
+      log.warn("world", `世界模型文件无法读取: ${path}`, error);
+      return;
+    }
+
     const start = performance.now();
-    const raw = readFileSync(path, "utf-8");
-    const lines = raw.trim().split("\n");
-    this.entries = [];
+    const entries: V18Entry[] = [];
+    const byNovel = new Map<string, V18Entry[]>();
+    const byType = new Map<string, V18Entry[]>();
+    const byNovelAndType = new Map<string, V18Entry[]>();
+    const byVersion = new Map<string, V18Entry[]>();
+    const dndGameRules: V18Entry[] = [];
+    const dndMappings: V18Entry[] = [];
+    const hallucinationRisky: V18Entry[] = [];
+    const lines = raw.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    let rejectedLines = 0;
 
     for (const line of lines) {
+      let e: V18Entry;
       try {
-        const e = JSON.parse(line) as V18Entry;
-        if (!e.type || !e.chapter) continue;
-        this.entries.push(e);
+        const candidate: unknown = JSON.parse(line);
+        if (!isValidV18Entry(candidate)) {
+          throw new Error("expected an object with non-empty string type and chapter fields");
+        }
+        e = candidate;
+      } catch {
+        // The historical v18 corpus can contain orphan candidates. They are not
+        // usable entries, but a valid replacement remains usable if it has at
+        // least one complete entry. The all-invalid case below is fail-closed.
+        rejectedLines += 1;
+        continue;
+      }
+
+      entries.push(e);
         const novel = e.novel || "未知";
 
         // 按小说索引
-        if (!this.byNovel.has(novel)) this.byNovel.set(novel, []);
-        this.byNovel.get(novel)!.push(e);
+        if (!byNovel.has(novel)) byNovel.set(novel, []);
+        byNovel.get(novel)!.push(e);
 
         // 按类型索引
-        if (!this.byType.has(e.type)) this.byType.set(e.type, []);
-        this.byType.get(e.type)!.push(e);
+        if (!byType.has(e.type)) byType.set(e.type, []);
+        byType.get(e.type)!.push(e);
 
         // 按小说+类型索引
         const novelTypeKey = `${novel}|${e.type}`;
-        if (!this.byNovelAndType.has(novelTypeKey)) this.byNovelAndType.set(novelTypeKey, []);
-        this.byNovelAndType.get(novelTypeKey)!.push(e);
+        if (!byNovelAndType.has(novelTypeKey)) byNovelAndType.set(novelTypeKey, []);
+        byNovelAndType.get(novelTypeKey)!.push(e);
 
         // 按版本索引
         const ver = e._version || "unknown";
-        if (!this.byVersion.has(ver)) this.byVersion.set(ver, []);
-        this.byVersion.get(ver)!.push(e);
+        if (!byVersion.has(ver)) byVersion.set(ver, []);
+        byVersion.get(ver)!.push(e);
 
         // D&D 游戏规则
         if (e.game_rule === true || e.game_rule === "true" || typeof e.game_rule === "string") {
-          this.dndGameRules.push(e);
+          dndGameRules.push(e);
         }
         if (e.dnd_mapping) {
-          this.dndMappings.push(e);
+          dndMappings.push(e);
         }
         if (e.hallucination_risk === true) {
-          this.hallucinationRisky.push(e);
+          hallucinationRisky.push(e);
         }
-      } catch { /* skip malformed */ }
     }
 
+    if (entries.length === 0) {
+      this.clear();
+      log.warn("world", `世界模型文件没有可用条目: ${path}${rejectedLines > 0 ? `（已拒绝 ${rejectedLines} 行）` : ""}`);
+      return;
+    }
+
+    // All parsing and indexing complete before replacing the live model. A
+    // failed replacement is unloaded rather than serving an old or mixed model.
+    freezeJsonEntries(entries);
+    freezeEntryBuckets(entries, dndGameRules, dndMappings, hallucinationRisky);
+    freezeIndexBuckets(byNovel, byType, byNovelAndType, byVersion);
+    this.entries = entries;
+    this.byNovel = byNovel;
+    this.byType = byType;
+    this.byNovelAndType = byNovelAndType;
+    this.byVersion = byVersion;
+    this.dndGameRules = dndGameRules;
+    this.dndMappings = dndMappings;
+    this.hallucinationRisky = hallucinationRisky;
     this.loaded = true;
     this.loadTime = performance.now() - start;
     // 每部小说的条目数原先算了但没进日志（下面两行只印总数），
@@ -178,23 +244,23 @@ export class WorldModelLoader {
   // ============================================================
 
   /** 获取所有条目（谨慎使用 — 内存大） */
-  getAll(): V18Entry[] {
+  getAll(): EntryList {
     return this.entries;
   }
 
   /** 按小说获取 */
-  getByNovel(novel: string): V18Entry[] {
-    return this.byNovel.get(novel) ?? [];
+  getByNovel(novel: string): EntryList {
+    return this.byNovel.get(novel) ?? EMPTY_ENTRY_LIST;
   }
 
   /** 按类型获取（保留旧名兼容） */
-  getByType(type: string): V18Entry[] {
-    return this.byType.get(type) ?? [];
+  getByType(type: string): EntryList {
+    return this.byType.get(type) ?? EMPTY_ENTRY_LIST;
   }
 
   /** 按小说+类型获取 */
-  getByNovelAndType(novel: string, type: string): V18Entry[] {
-    return this.byNovelAndType.get(`${novel}|${type}`) ?? [];
+  getByNovelAndType(novel: string, type: string): EntryList {
+    return this.byNovelAndType.get(`${novel}|${type}`) ?? EMPTY_ENTRY_LIST;
   }
 
   /** 所有小说名 */
@@ -212,7 +278,7 @@ export class WorldModelLoader {
   // ============================================================
 
   /** 获取含 game_rule 的条目（可路由到 D&D 规则系统） */
-  getDndRules(novel?: string): V18Entry[] {
+  getDndRules(novel?: string): EntryList {
     if (novel) {
       return this.dndGameRules.filter(e => e.novel === novel);
     }
@@ -220,7 +286,7 @@ export class WorldModelLoader {
   }
 
   /** 获取含 dnd_mapping 的条目 */
-  getDndMappings(novel?: string): V18Entry[] {
+  getDndMappings(novel?: string): EntryList {
     if (novel) {
       return this.dndMappings.filter(e => e.novel === novel);
     }
@@ -228,7 +294,7 @@ export class WorldModelLoader {
   }
 
   /** 获取含 mechanic 描述的条目 */
-  getMechanics(novel?: string): V18Entry[] {
+  getMechanics(novel?: string): EntryList {
     const all = this.entries.filter(e => e.mechanic);
     if (novel) return all.filter(e => e.novel === novel);
     return all;
@@ -251,7 +317,7 @@ export class WorldModelLoader {
     novel?: string,
     type?: string,
     maxResults: number = 10
-  ): ScoredEntry[] {
+  ): readonly ScoredEntry[] {
     const pool = novel
       ? (type ? this.getByNovelAndType(novel, type) : this.getByNovel(novel))
       : (type ? this.getByType(type) : this.entries);
@@ -298,7 +364,7 @@ export class WorldModelLoader {
    * 获取 faction_relation 类型条目
    * 旧接口: 返回任意类型（可强转）
    */
-  getFactionRelations(): any[] {
+  getFactionRelations(): EntryList {
     return this.getByType("faction_relation");
   }
 
@@ -306,7 +372,7 @@ export class WorldModelLoader {
    * 获取 behavior 类型条目
    * 旧接口兼容
    */
-  getBehaviors(): any[] {
+  getBehaviors(): EntryList {
     return this.getByType("behavior");
   }
 
@@ -314,7 +380,7 @@ export class WorldModelLoader {
    * 关键词匹配 causal 类型条目
    * 旧接口: queryCausal(contextKeywords, maxResults)
    */
-  queryCausal(contextKeywords: string[], maxResults: number = 3): any[] {
+  queryCausal(contextKeywords: string[], maxResults: number = 3): EntryList {
     return this.search(contextKeywords, undefined, "causal", maxResults)
       .map(s => s.entry);
   }
@@ -323,7 +389,7 @@ export class WorldModelLoader {
    * 关键词匹配 behavior 类型条目
    * 旧接口: queryBehavior(contextKeywords, maxResults)
    */
-  queryBehavior(contextKeywords: string[], maxResults: number = 1): any[] {
+  queryBehavior(contextKeywords: string[], maxResults: number = 1): EntryList {
     return this.search(contextKeywords, undefined, "behavior", maxResults)
       .map(s => s.entry);
   }
@@ -331,7 +397,7 @@ export class WorldModelLoader {
   /**
    * 随机获取 N 条 causal（旧接口兼容）
    */
-  randomCausal(n: number = 1): any[] {
+  randomCausal(n: number = 1): EntryList {
     const causal = this.getByType("causal");
     if (causal.length === 0) return [];
     const result: any[] = [];
@@ -394,4 +460,58 @@ export class WorldModelLoader {
       dndMappings: entries.filter(e => e.dnd_mapping).length,
     };
   }
+
+  private clear() {
+    this.entries = EMPTY_ENTRY_LIST;
+    this.byNovel = new Map();
+    this.byType = new Map();
+    this.byNovelAndType = new Map();
+    this.byVersion = new Map();
+    this.dndGameRules = EMPTY_ENTRY_LIST;
+    this.dndMappings = EMPTY_ENTRY_LIST;
+    this.hallucinationRisky = EMPTY_ENTRY_LIST;
+    this.consumedIndices.clear();
+    this.loaded = false;
+    this.loadTime = 0;
+  }
+}
+
+function isValidV18Entry(value: unknown): value is V18Entry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return typeof entry.type === "string" && entry.type.trim().length > 0
+    && typeof entry.chapter === "string" && entry.chapter.trim().length > 0;
+}
+
+/**
+ * A shared model is a reference dataset, not session state. JSON cannot contain
+ * cycles, so this stack traversal freezes every parsed object and array exactly
+ * once without recursive call-stack growth or per-query cloning.
+ */
+function freezeJsonEntries(entries: V18Entry[]): void {
+  for (const entry of entries) {
+    const pending: object[] = [entry];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      for (const value of Object.values(current)) {
+        if (value !== null && typeof value === "object") pending.push(value);
+      }
+      Object.freeze(current);
+    }
+  }
+}
+
+function freezeEntryBuckets(...buckets: V18Entry[][]): void {
+  for (const bucket of buckets) Object.freeze(bucket);
+}
+
+function freezeIndexBuckets(...indexes: Map<string, V18Entry[]>[]): void {
+  for (const index of indexes) {
+    for (const bucket of index.values()) Object.freeze(bucket);
+  }
+}
+
+function sharedPathKey(path: string): string {
+  const canonical = resolve(path);
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }

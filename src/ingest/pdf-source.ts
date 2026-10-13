@@ -11,7 +11,41 @@
 // 模组附件是 6 张图，将来用得上。
 
 import { PDFParse } from "pdf-parse";
-import { createPdfDocumentIR, type DocumentIR, type DocumentPage } from "./document-ir";
+import { sha256, type DocumentIR, type DocumentPage } from "./document-ir";
+import { cleanPageText } from "./clean-text";
+
+export const PDF_TEXT_UNAVAILABLE = "PDF_TEXT_UNAVAILABLE" as const;
+
+/**
+ * Limits used by the isolated public-PDF worker.  They deliberately describe
+ * output rather than parser implementation details: pdf-parse has no
+ * streaming text budget API, so the worker must inspect one page at a time.
+ */
+export interface PdfExtractionLimits {
+  maxPages: number;
+  maxPageTextUtf8Bytes: number;
+  maxTotalTextUtf8Bytes: number;
+}
+
+export type PdfExtractionLimitKind = "pages" | "page_text_utf8" | "total_text_utf8";
+
+/** A safe, typed worker-to-parent signal; never surface a parser message. */
+export class PdfExtractionResourceLimitError extends Error {
+  constructor(readonly limitKind: PdfExtractionLimitKind) {
+    super(`PDF extraction exceeded ${limitKind}`);
+    this.name = "PdfExtractionResourceLimitError";
+  }
+}
+
+/** A syntactically valid PDF without a usable text layer needs OCR, not compilation. */
+export class PdfTextUnavailableError extends Error {
+  readonly code = PDF_TEXT_UNAVAILABLE;
+
+  constructor() {
+    super("[ingest] PDF has no usable normalized text layer");
+    this.name = "PdfTextUnavailableError";
+  }
+}
 
 /**
  * 抽出逐页原始文本。下游是 cleanPageText。
@@ -24,7 +58,14 @@ export async function extractDocumentPages(data: Uint8Array): Promise<DocumentPa
   // 少了这行也会抛（库自己报 InvalidPDFException），但那条消息指不回这里。
   if (data.length === 0) throw new Error("[ingest] PDF 数据为空");
 
-  const res = await new PDFParse({ data }).getText();
+  // pdf-parse may transfer/detach the caller's ArrayBuffer. Record the
+  // source-exact identity before handing it off, so a later page result never
+  // turns the original PDF identity into the SHA-256 of an emptied buffer.
+  const documentHash = sha256(data);
+
+  const parser = new PDFParse({ data });
+  try {
+    const res = await parser.getText();
 
   // 逐页元素的形状是实测的，不是照记忆写的：pages[i] 是对象 { num, text }，
   // num 从 1 起，text 就是该页全文；这与包内 PageTextResult 的声明一致。
@@ -54,12 +95,68 @@ export async function extractDocumentPages(data: Uint8Array): Promise<DocumentPa
     }
     return { pageNumber: p.num, rawText: p.text };
   });
-  return createPdfDocumentIR(data, pages).pages;
+    return pages.map((page) => ({
+      ...page,
+      rawTextHash: sha256(page.rawText),
+      documentHash,
+      hashSource: "pdf_bytes_sha256",
+    }));
+  } finally {
+    await parser.destroy().catch(() => undefined);
+  }
+}
+
+/**
+ * Extract untrusted PDF text page-by-page.  This must run only in the
+ * disposable parser process: asking pdf-parse for all pages creates one large
+ * aggregate string before the caller can enforce a budget.
+ */
+export async function extractDocumentPagesBounded(
+  data: Uint8Array,
+  limits: PdfExtractionLimits,
+  observer?: { beforeGetText(pageNumber: number): void },
+): Promise<DocumentPage[]> {
+  if (data.length === 0) throw new Error("[ingest] PDF data is empty");
+  const documentHash = sha256(data);
+  const parser = new PDFParse({ data });
+  try {
+    const info = await parser.getInfo();
+    if (!Number.isSafeInteger(info.total) || info.total < 1) throw new Error("[ingest] pdf-parse returned invalid page count");
+    // This check intentionally precedes every getText call.  Do not change it
+    // to a post-extraction check: a 257-page document must never expand page 1.
+    if (info.total > limits.maxPages) throw new PdfExtractionResourceLimitError("pages");
+    const pages: DocumentPage[] = [];
+    let totalBytes = 0;
+    const encoder = new TextEncoder();
+    for (let pageNumber = 1; pageNumber <= info.total; pageNumber++) {
+      observer?.beforeGetText(pageNumber);
+      const textResult = await parser.getText({ partial: [pageNumber] });
+      const page = textResult.pages.find((candidate) => candidate.num === pageNumber);
+      if (!page || typeof page.text !== "string") throw new Error("[ingest] pdf-parse returned no text for a requested page");
+      const pageBytes = encoder.encode(page.text).byteLength;
+      if (pageBytes > limits.maxPageTextUtf8Bytes) throw new PdfExtractionResourceLimitError("page_text_utf8");
+      totalBytes += pageBytes;
+      if (totalBytes > limits.maxTotalTextUtf8Bytes) throw new PdfExtractionResourceLimitError("total_text_utf8");
+      pages.push({
+        pageNumber,
+        rawText: page.text,
+        rawTextHash: sha256(page.text),
+        documentHash,
+        hashSource: "pdf_bytes_sha256",
+      });
+    }
+    return pages;
+  } finally {
+    await parser.destroy().catch(() => undefined);
+  }
 }
 
 /** Build the complete source-exact representation from original PDF bytes. */
 export async function buildDocumentIR(data: Uint8Array): Promise<DocumentIR> {
   const pages = await extractDocumentPages(data);
+  if (!pages.some((page) => cleanPageText(page.rawText).trim() !== "")) {
+    throw new PdfTextUnavailableError();
+  }
   const documentHash = pages[0]?.documentHash;
   if (!documentHash) throw new Error("[ingest] PDF 文档哈希缺失");
   return {

@@ -11,25 +11,66 @@
 //
 // bun test src/__tests__/party-member-unified-entry.test.ts
 
-import { describe, it, expect } from "bun:test";
-import { GameSession, parsePlayerCountRange, PARTY_HARD_LIMIT } from "../api/game-session";
+import { afterAll, describe, it, expect } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  GameSession,
+  parsePlayerCountRange,
+  PARTY_HARD_LIMIT,
+  runOrdinaryDurableActionTransaction,
+} from "../api/game-session";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 512, temperature: 0.7,
 };
 
+const durableCareerHostCapability = Object.freeze(Object.create(null)) as object;
+const careerRoot = mkdtempSync(join(tmpdir(), "party-member-durable-"));
+
+afterAll(() => rmSync(careerRoot, { recursive: true, force: true }));
+
+function newDurableSession(id: string, archetypeId?: string, characterName?: string): GameSession {
+  return new GameSession(
+    id,
+    "cosmic-horror",
+    CFG,
+    archetypeId,
+    characterName,
+    undefined,
+    { careerRoot },
+    undefined,
+    "preferred",
+    { careerEntryPersistence: "durable", ordinaryDurableHostCapability: durableCareerHostCapability },
+  );
+}
+
+function durableAct(session: GameSession, input: string) {
+  return runOrdinaryDurableActionTransaction(
+    session,
+    durableCareerHostCapability,
+    async (act) => act(input),
+  );
+}
+
+/** Portable snapshot evidence is the public observation of canonical PCs. */
+function characterSnapshot(session: GameSession, pcId: string): any | undefined {
+  return session.exportOrdinarySessionSnapshot().state.characters.find((entry) => entry.pcId === pcId)?.sheet;
+}
+
 /** 八项检查：对给定 session + pcId 断言全部成立，不齐就在这里红 */
 function assertEightThings(session: any, pcId: string) {
-  const sheet = session.characters.get(pcId);
+  const sheet = characterSnapshot(session, pcId);
   expect(sheet).toBeDefined();
 
-  // 1. sanityEngines.set
-  expect(session.sanityEngines.has(pcId)).toBe(true);
-  const san = session.sanityEngines.get(pcId);
+  // 1. canonical SAN is present in the persisted ordinary snapshot.
+  const san = session.exportOrdinarySessionSnapshot().state.sanities.find((entry: { pcId: string }) => entry.pcId === pcId)?.state;
+  expect(san).toBeDefined();
 
   // 2. SAN 取角色 POW（不是硬编码 50，也不是沿用了别的角色的）
-  expect(san.state.maxSAN).toBe(sheet.attributes.power);
+  expect(san?.maxSAN).toBe(sheet.attributes.power);
 
   // 3. world.registerPlayer
   expect(session.world.getPlayerIds()).toContain(pcId);
@@ -43,7 +84,7 @@ function assertEightThings(session: any, pcId: string) {
   expect(session.session.get(pcId)).toBeDefined();
 
   // 6. characters.set（已经在函数开头取过，这里确认非 undefined）
-  expect(session.characters.get(pcId)).toBe(sheet);
+  expect(session.exportOrdinarySessionSnapshot().state.characters.filter((entry: { pcId: string }) => entry.pcId === pcId)).toHaveLength(1);
 
   // 7. world.upsertEntity（世界实体真的存在，不是"等某个流程顺手建"）
   const ent = session.world.getEntity(pcId);
@@ -61,59 +102,66 @@ function assertEightThings(session: any, pcId: string) {
 
 describe("八项对任意 PC 都成立——参数化覆盖三个入口", () => {
   it("p1（构造函数路径：new GameSession(..., archetypeId, name)）", () => {
-    const s: any = new GameSession(`u1-${Math.random()}`, "cosmic-horror", CFG, "investigator", "甲");
+    const s: any = newDurableSession(`u1-${Math.random()}`, "investigator", "甲");
     assertEightThings(s, "p1");
   });
 
   it("p1（\"创建角色\"路径：先无 archetype 构造，再建号）", async () => {
-    const s: any = new GameSession(`u2-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
+    const s: any = newDurableSession(`u2-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
     assertEightThings(s, "p1");
   });
 
   it("p2（\"创建队友\"路径）", async () => {
-    const s: any = new GameSession(`u3-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    await s.act("创建队友 乙 investigator");
+    const s: any = newDurableSession(`u3-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
+    await durableAct(s, "创建队友 乙 investigator");
     assertEightThings(s, "p2");
   });
 
   it("p3（第二次\"创建队友\"，pcId 不撞车）", async () => {
-    const s: any = new GameSession(`u4-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    await s.act("创建队友 乙 investigator");
-    await s.act("创建队友 丙 investigator");
+    const s: any = newDurableSession(`u4-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
+    await durableAct(s, "创建队友 乙 investigator");
+    await durableAct(s, "创建队友 丙 investigator");
     assertEightThings(s, "p2");
     assertEightThings(s, "p3");
   });
 });
 
 describe("活 bug 回归：\"创建角色\"后 SAN 上限必须取新角色的 POW", () => {
-  it("**错误行为的红线**：即使旧 SAN 引擎被污染成绝不可能撞上真实 POW 的值，新建角色后也必须换掉", async () => {
-    const s: any = new GameSession(`r1-${Math.random()}`, "cosmic-horror", CFG); // 无 archetype，构造走 SAN(50) 空壳分支
-    s.sanity.state.maxSAN = 999; // 人为污染：POW 正常范围 15-90，999 绝不会碰巧撞上
-    s.sanity.state.currentSAN = 999;
-    await s.act("创建角色 investigator 甲");
-    expect(s.sanity.state.maxSAN).not.toBe(999);
+  it("**错误行为的红线**：即使占位 SAN 已被正式入口改变，新建角色后也必须换掉", async () => {
+    const s: any = newDurableSession(`r1-${Math.random()}`); // 无 archetype，构造走 SAN(50) 空壳分支
+    expect(s.setPlayerSan("p1", 1).ok).toBe(true);
+    await durableAct(s, "创建角色 investigator 甲");
+    expect(s.sanity.state.currentSAN).not.toBe(1);
     expect(s.sanity.state.maxSAN).toBe(s.activeCharacter.attributes.power);
+    expect(s.sanity.state.currentSAN).toBe(s.activeCharacter.attributes.power);
   });
 
-  it("**目标行为错误的对照**：sanityEngines 里的那份也必须是新的，不是只换了 this.sanity 这个引用", async () => {
-    const s: any = new GameSession(`r2-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    const first = s.sanityEngines.get("p1");
-    await s.act("创建角色 investigator 乙"); // 重建同一个 pcId
-    const second = s.sanityEngines.get("p1");
-    expect(second).not.toBe(first); // 整体换掉，不是原地改字段
-    expect(second.state.maxSAN).toBe(s.activeCharacter.attributes.power);
+  it("**目标行为错误的对照**：重建后的公开 SAN 与持久化快照必须来自新角色，而不是只换了活动视图", async () => {
+    const s: any = newDurableSession(`r2-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
+    expect(s.setPlayerSan("p1", 1)).toMatchObject({ ok: true });
+    const first = s.exportOrdinarySessionSnapshot().state.sanities.find((entry: { pcId: string }) => entry.pcId === "p1")?.state;
+    expect(first).toMatchObject({ currentSAN: 1 });
+    await durableAct(s, "创建角色 investigator 乙"); // 重建同一个 pcId
+    const second = s.exportOrdinarySessionSnapshot().state.sanities.find((entry: { pcId: string }) => entry.pcId === "p1")?.state;
+    const replacementPow = s.activeCharacter.attributes.power;
+    expect(second).toMatchObject({ currentSAN: replacementPow, maxSAN: replacementPow });
+    expect(second?.currentSAN).not.toBe(1);
+    expect(s.sanity.state).toEqual(second);
+    expect(s.world.getPlayerSanity("p1")).toEqual(second);
+    expect(first).toMatchObject({ currentSAN: 1 });
+    expect(first?.currentSAN).not.toBe(second?.currentSAN);
   });
 
   it("**文本相似但合法**：重建时新角色 POW 恰好等于旧值也不算错——断言的是\"取自新角色\"不是\"数值必须变\"", async () => {
-    const s: any = new GameSession(`r3-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
+    const s: any = newDurableSession(`r3-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
     // 直接把角色卡的 POW 手动改成与当前 SAN 相同的值，模拟"碰巧没变"
-    s.characters.get("p1").attributes.power = s.sanity.state.maxSAN;
-    await s.act("创建角色 investigator 甲"); // 用同名同职业重建，POW 由 buildCharacterForRuleset 重新随机
+    expect(s.updateActiveCharacter({ attributes: { power: s.sanity.state.maxSAN } })).toMatchObject({ status: "updated" });
+    await durableAct(s, "创建角色 investigator 甲"); // 用同名同职业重建，POW 由 buildCharacterForRuleset 重新随机
     // 不断言具体数值（会被重新随机），只断言"取自这次新建的角色"这一件事仍然成立
     expect(s.sanity.state.maxSAN).toBe(s.activeCharacter.attributes.power);
   });
@@ -121,12 +169,12 @@ describe("活 bug 回归：\"创建角色\"后 SAN 上限必须取新角色的 P
 
 describe("活 bug 回归：\"创建队友\"后世界实体必须真的存在", () => {
   it("**错误行为的红线**：GET 状态时不落到字面兜底 {name:\"调查员\", hp:12}", async () => {
-    const s: any = new GameSession(`w1-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    await s.act("创建队友 乙 investigator");
-    s.activePlayerId = "p2";
+    const s: any = newDurableSession(`w1-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
+    await durableAct(s, "创建队友 乙 investigator");
+    await s.act("状态", "p2");
     const state = s.getState();
-    const p2Sheet = s.characters.get("p2");
+    const p2Sheet = characterSnapshot(s, "p2");
     expect(state.player.name).toBe(p2Sheet.name);
     expect(state.player.hp).toBe(p2Sheet.hp);
     expect(state.player.maxHp).toBe(p2Sheet.maxHp);
@@ -136,9 +184,9 @@ describe("活 bug 回归：\"创建队友\"后世界实体必须真的存在", (
   });
 
   it("**目标行为错误的对照**：world.getEntity(pid) 本身就该有这一行，不只是 getState() 拼出来的", async () => {
-    const s: any = new GameSession(`w2-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    await s.act("创建队友 乙 investigator");
+    const s: any = newDurableSession(`w2-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
+    await durableAct(s, "创建队友 乙 investigator");
     const ent = s.world.getEntity("p2");
     expect(ent).toBeDefined();
     expect(ent.type).toBe("pc");
@@ -147,36 +195,36 @@ describe("活 bug 回归：\"创建队友\"后世界实体必须真的存在", (
 
 describe("活 bug 回归：无 archetype 建会话后直接\"创建队友\"，不能顶掉玩家自己的 p1 槽位", () => {
   // 缺陷机制：不带 archetype 构造会走空壳分支，往 sanityEngines/world/session
-  // 注册 "p1" 却**不填** this.party。原本 pid 用 `this.party.size + 1` 计算，
+  // 注册 "p1" 却**不填** #party。原本 pid 用 `#party.size + 1` 计算，
   // party.size 为 0 → pid = "p1"，队友的卡直接覆盖掉空壳的 SAN 引擎/
   // characters/世界实体，播报却说"加入了队伍"。根因是 pid 分配依赖了一个
   // 已知会短暂失同步的计数（party 不是唯一持有 pcId 的地方）。
 
   it("**错误行为的红线**：直接\"创建队友\"拿到的 pcId 不是 p1，p1 空壳槽位仍在，乙八项齐全", async () => {
-    const s: any = new GameSession(`o1-${Math.random()}`, "cosmic-horror", CFG); // 无 archetype → 走空壳分支
+    const s: any = newDurableSession(`o1-${Math.random()}`); // 无 archetype → 走空壳分支
     // 空壳分支确实建了 p1 的槽位（sanityEngines/world/session），但没填 party
-    expect(s.party.has("p1")).toBe(false); // 空壳不是正式成员——这本身就是缺陷的背景
-    await s.act("创建队友 乙 investigator");
+    expect(s.getState().party.some((member: { pcId: string }) => member.pcId === "p1")).toBe(false); // 空壳不是正式成员——这本身就是缺陷的背景
+    await durableAct(s, "创建队友 乙 investigator");
     // 乙的 pcId 不能复用 p1（哪怕 party.size 此刻是 0）
-    expect(s.characters.get("p1")).toBeUndefined(); // 队友的卡没有顶进 p1
-    const p2sheet = s.characters.get("p2");
+    expect(characterSnapshot(s, "p1")).toBeUndefined(); // 队友的卡没有顶进 p1
+    const p2sheet = characterSnapshot(s, "p2");
     expect(p2sheet?.name).toBe("乙");
     // p1 空壳槽位仍然存在：三个持有者都在
     expect(s.session.get("p1")).toBeDefined();
-    expect(s.sanityEngines.has("p1")).toBe(true);
+    expect(s.exportOrdinarySessionSnapshot().state.sanities.some((entry: { pcId: string }) => entry.pcId === "p1")).toBe(true);
     expect(s.world.getPlayerIds()).toContain("p1");
     // 乙作为正式成员八项齐全
     assertEightThings(s, "p2");
-    expect(s.party.has("p2")).toBe(true);
+    expect(s.getState().party.some((member: { pcId: string }) => member.pcId === "p2")).toBe(true);
   });
 
   it("**目标行为错误的对照**：创建队友之后再来\"创建角色 甲\"，甲落在 p1，乙不被覆盖", async () => {
-    const s: any = new GameSession(`o2-${Math.random()}`, "cosmic-horror", CFG); // 无 archetype → 走空壳分支
-    await s.act("创建队友 乙 investigator"); // 乙拿 p2（不能顶 p1）
-    expect(s.characters.get("p2")?.name).toBe("乙");
-    await s.act("创建角色 investigator 甲"); // 重建当前活跃 PC = p1
-    expect(s.characters.get("p1")?.name).toBe("甲"); // 甲落在 p1，空壳被正式角色卡填充
-    expect(s.characters.get("p2")?.name).toBe("乙"); // 乙没被覆盖
+    const s: any = newDurableSession(`o2-${Math.random()}`); // 无 archetype → 走空壳分支
+    await durableAct(s, "创建队友 乙 investigator"); // 乙拿 p2（不能顶 p1）
+    expect(characterSnapshot(s, "p2")?.name).toBe("乙");
+    await durableAct(s, "创建角色 investigator 甲"); // 重建当前活跃 PC = p1
+    expect(characterSnapshot(s, "p1")?.name).toBe("甲"); // 甲落在 p1，空壳被正式角色卡填充
+    expect(characterSnapshot(s, "p2")?.name).toBe("乙"); // 乙没被覆盖
     assertEightThings(s, "p1");
     assertEightThings(s, "p2");
   });
@@ -184,61 +232,61 @@ describe("活 bug 回归：无 archetype 建会话后直接\"创建队友\"，�
 
 describe("人数：硬上限 10 拒绝，模组推荐人数超出后警告但放行", () => {
   async function buildParty(n: number, session: any) {
-    for (let i = 2; i <= n; i++) await session.act(`创建队友 队友${i} investigator`);
+    for (let i = 2; i <= n; i++) await durableAct(session, `创建队友 队友${i} investigator`);
   }
 
   it("**错误行为的红线**：第 11 个 PC 必须被拒绝，人数不增长", async () => {
-    const s: any = new GameSession(`n1-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲"); // p1，1 人
+    const s: any = newDurableSession(`n1-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲"); // p1，1 人
     await buildParty(PARTY_HARD_LIMIT, s); // 补到 10 人
-    expect(s.party.size).toBe(PARTY_HARD_LIMIT);
-    const res = await s.act("创建队友 队友11 investigator");
-    expect(s.party.size).toBe(PARTY_HARD_LIMIT); // 没有增长
+    expect(s.getState().party).toHaveLength(PARTY_HARD_LIMIT);
+    const res = await durableAct(s, "创建队友 队友11 investigator");
+    expect(s.getState().party).toHaveLength(PARTY_HARD_LIMIT); // 没有增长
     const text = res.events.map((e: any) => e.content).join("\n");
     expect(text).toMatch(/上限|已满/);
   });
 
   it("**目标行为错误的对照**：第 10 个（边界值本身）必须放行，不能提前一步就拒绝", async () => {
-    const s: any = new GameSession(`n2-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
+    const s: any = newDurableSession(`n2-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
     await buildParty(PARTY_HARD_LIMIT, s);
-    expect(s.party.size).toBe(PARTY_HARD_LIMIT); // 10 人成功建成，没有在第 10 个就被拒
+    expect(s.getState().party).toHaveLength(PARTY_HARD_LIMIT); // 10 人成功建成，没有在第 10 个就被拒
   });
 
   it("**文本相似但合法**：重建已存在的 pcId（\"创建角色\"）不受人数上限影响，即使队伍已满", async () => {
-    const s: any = new GameSession(`n3-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
+    const s: any = newDurableSession(`n3-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
     await buildParty(PARTY_HARD_LIMIT, s);
-    expect(s.party.size).toBe(PARTY_HARD_LIMIT);
-    const res = await s.act("创建角色 investigator 甲改名"); // 重建 p1，不是新增
-    expect(s.party.size).toBe(PARTY_HARD_LIMIT); // 人数不变，但重建本身要成功
+    expect(s.getState().party).toHaveLength(PARTY_HARD_LIMIT);
+    const res = await durableAct(s, "创建角色 investigator 甲改名"); // 重建 p1，不是新增
+    expect(s.getState().party).toHaveLength(PARTY_HARD_LIMIT); // 人数不变，但重建本身要成功
     const text = res.events.map((e: any) => e.content).join("\n");
     expect(text).not.toMatch(/上限|已满/);
     expect(s.activeCharacter.name).toBe("甲改名");
   });
 
   it("**正确行为**：模组推荐 2~3 人的谷仓，第 4 人加入要有警告，且仍然加入成功", async () => {
-    const s: any = new GameSession(`n4-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
+    const s: any = newDurableSession(`n4-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
     await s.act("加载模组 普瑞米尔的谷仓");
-    const r2 = await s.act("创建队友 乙 investigator");
-    const r3 = await s.act("创建队友 丙 investigator");
-    const r4 = await s.act("创建队友 丁 investigator");
+    const r2 = await durableAct(s, "创建队友 乙 investigator");
+    const r3 = await durableAct(s, "创建队友 丙 investigator");
+    const r4 = await durableAct(s, "创建队友 丁 investigator");
     const t2 = r2.events.map((e: any) => e.content).join("\n");
     const t3 = r3.events.map((e: any) => e.content).join("\n");
     const t4 = r4.events.map((e: any) => e.content).join("\n");
     expect(t2).not.toMatch(/模组推荐/); // 第 2 人在 2~3 范围内，不警告
     expect(t3).not.toMatch(/模组推荐/); // 第 3 人正好是上界，不警告
     expect(t4).toMatch(/模组推荐 2~3 人，当前 4 人/); // 第 4 人超出上界，警告
-    expect(s.party.size).toBe(4); // 放行，不是拒绝
+    expect(s.getState().party).toHaveLength(4); // 放行，不是拒绝
   });
 
   it("**目标行为错误的对照**：没加载任何模组时不该凭空警告（没有推荐人数就不该警告）", async () => {
-    const s: any = new GameSession(`n5-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    const r2 = await s.act("创建队友 乙 investigator");
-    const r3 = await s.act("创建队友 丙 investigator");
-    const r4 = await s.act("创建队友 丁 investigator");
+    const s: any = newDurableSession(`n5-${Math.random()}`);
+    await durableAct(s, "创建角色 investigator 甲");
+    const r2 = await durableAct(s, "创建队友 乙 investigator");
+    const r3 = await durableAct(s, "创建队友 丙 investigator");
+    const r4 = await durableAct(s, "创建队友 丁 investigator");
     for (const r of [r2, r3, r4]) {
       const t = r.events.map((e: any) => e.content).join("\n");
       expect(t).not.toMatch(/模组推荐/);

@@ -890,7 +890,9 @@ export class StoryGenerator {
             exits.push({
               target: targetSceneId,
               desc: `前往${targetTemplate.name}`,
-              locked: Math.random() < tmpl.lockedExitChance,
+              // Generated locks have no gate executor. Do not emit an
+              // unactionable lock and pretend it survived installation.
+              locked: false,
             });
           }
         }

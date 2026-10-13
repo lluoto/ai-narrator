@@ -1104,6 +1104,21 @@ NPC 只有名字与描述（role / personality / sceneId 空）、era / summary 
 （spec 里已记为硬边界）。所以「读取层产出可运行模组」不是读取层单方面能完成的事，
 需要运行层那边配合出一个「支持配置由人写、数据由读取层产」的分工。
 
+## Source disposition is not content readiness (2026-09-23)
+
+Mechanical closure answers a narrower question than content readiness. A
+whole-source disposition must classify every canonical root independently as
+an accepted binding, an explicit non-binding, mechanics evidence, an open draft
+candidate, or unmodeled. It must never let an accepted status on one extracted
+candidate conceal another open slot from the same root or heading.
+
+Accordingly, the report is derived again from the canonical artifact and is
+tamper-rejected rather than trusted as a copied summary. Public callers receive
+only aggregate readiness/counts. Open roots and open questions remain blocking
+content-readiness evidence even where the mechanics graph has a closed witness;
+the two statuses must be reported separately and neither is a substitute for
+arbitrary real-PDF content coverage.
+
 **这条该怎么用**：不是说内容相似度白做了——线索/物品/连接总得先抽出来才谈得上连通。
 但**报告里应该同时印这两个数**，否则「差异从 179 降到 150」会被读成「接近能跑了」，
 而那可能只是描述更像了、连一条路都还没有。
@@ -2242,3 +2257,1075 @@ matchTexts 这份数据本身上"，不管数据是怎么进来的，都要经�
 可直接复算）：7 处撞车，全部集中在 weisen_bar（3）与 newsstand（4），
 其余 18 个场景 0 命中——说明这不是一个系统性大范围的问题，是这一轮
 手写数据的局部失误，修完之后（commit 33fa0da）复算为 0。
+
+### 真实复足结构到可运行闭环：标题、线索、fail-closed 与 legacy 边界（2026-09-19）
+
+本轮真实来源为 SHA-256
+`a774a2478962db7964b10e777a91cb8834a66020be29769493e52b94001235b5` 的
+复足 PDF（16 页）。`DocumentIR` 最终保留 **22 个 heading**：裸标题不能只
+按排版形状定性，必须由前后段落、页内位置与下属内容共同约束；由此消除了
+两个假标题，并正确识别「黑夜中的尖叫」「梦境之石」「楼梯上的蜘蛛」。这不是
+放宽标题规则：把一行升格为 heading 仍要求其处在可解释的结构上下文中。
+
+**具名发现不能等同于 `▶` 行。** 真实 PDF 的「寻找劳伦」第 6 页保守得到三项
+source-named clue/context：`劳伦的尸体`、`大圆环`、`屋子周围`。它们从
+legacy `Section.items` 延续到 `DocumentBlocks`、source graph 与 template 输入；
+NPC 名称及规则说明里的冒号行不因此升格。这里同时订正一项报告表述：结构化
+条目并不全是 `▶` 语法；`▶` 只是其中一种原文记号，heading、具名上下文和
+已解析条目有各自的来源与证据。把它们统称为 `▶` 会把格式信号误当成语义分类。
+
+**不能因为分类器没给出答案就继续写半成品。** `scripts/ingest/run.ts` 现于首次
+写文件前 fail closed：mandatory section 或 item 分类全部为空，或没有 usable
+scene，均 exit 1。这个门禁只拒绝「主结构完全没有形成」；部分分类、无 item
+文档，以及连接、结局、叙事尚未抽出的既有可降级契约不变。判据因此区分
+“不能装配”与“可装配但字段仍未知”，而不是把两者都伪装成成功。
+
+**真实 LLM 摄取的证据边界。** 清理本进程代理变量后的一次真实 legacy ingest
+在本地得到 22/22 section、3/3 item；ModuleData 为 11 scenes / 1 item / 2 clues /
+1 NPC / 0 dangling refs / 2 textual endings，产物在 gitignored
+`analysis/ingest-fuzu`。这只记录可复查的方法和这次本地产物，不把它表述为任何
+外部模型端点的持续可用性。本文先前涉及外部端点的历史陈述也不得作为当前
+可用性证据；需要验证时，必须在当次任务中实际运行并只报告当次所需事实。
+
+**“能装配”与 legacy 跑团完成仍是两件事。** 对上述 ModuleData 运行
+`scripts/ingest/e2e-run.ts` 得到 exit 1：`movement-smoke`、`completed=false`、
+11 decisions / 11 scenes，且 neutral support 没有 structured ending。原因不是把
+失败吞掉：legacy ModuleData 不猜 clue `findMethods`，顶层条目仍有未消费项，故
+不能声称 legacy 路线已经跑通终局。与此分开，compiler queue 绑定真实 heading
+scope；没有结局时 fallback 只覆盖 source statements、绝不伪造 terminal。一次性
+明确 benchmark hints 后，`prepareCompiler → dynamic queue IDs → resolveCompiler →
+witness replay → GameSession` 的 in-memory real-source-structure 回放可机械闭合，
+到达 `escape_with_dream_stone` 和 `lost_without_dream_stone` 两个终局；terminal 后
+actions 为 0，retry 为 `compiled_terminal`。
+
+该接受样本的审计为 22 headings / 3 clues / 4 playable scenes / 33 reachable states /
+2 reachable endings / deadlocks 0 / failure risks `[]`，且“显式 discovery 覆盖默认项”
+的审计非空。证据落在 gitignored `analysis/fuzu-compiler-acceptance`。结论的范围是
+真实来源到 compiler→GameSession 的闭环，而不是 legacy e2e 路线、公开 PDF 入口或
+artifact 保存恢复的完成声明。
+
+**收尾补正：主结构为空必须早拒，重复表示必须对齐。** 审查新增了两个此前
+未被上述判据覆盖的形状：一份没有 heading 或根本没有 `classifyInputs` 的输入，也会
+走到“零 usable scene”；它现在在创建输出目录和任何首次写文件之前以 `no-scenes`
+fail closed，而非留下空产物。另一个是带项目符号的 discovery guide：它不能只在
+DocumentBlocks 或 legacy `Section.items` 的一侧存在，二者必须得到相同条目。对应
+回归先为 25 pass / 2 fail，恢复为 27 pass / 0 fail；最终全部 ingest 定向验证为
+541 pass / 0 fail。这两项把“有输入但没有可装配主结构”和“同一来源两种中间表示
+漂移”分别钉成可判别失败，未改变部分分类、无 item 或未抽语义字段的既有降级边界。
+
+根代理随后在沙箱外运行 `bun scripts/preflight.ts`，exit 0：boolean 实现 163、丢返回值
+0；typecheck exit 0；3334 tests / 240 files 与基线一致，`unwiredMethods=84` 与基线一致，且
+`core.hooksPath=.githooks` 与 `commit-msg` 判据均已生效。这完成的是 compiler 主路径验收；
+上述 legacy `scripts/ingest/e2e-run.ts` 的 exit 1 边界不变。
+
+### 表格行先保结构、后做语义：对 p15 潜伏损坏的纠正（2026-09-20）
+
+上文「p15 的结局与奖励表被整片焊成一行」所记损坏已经在来源结构层修复，
+但当时否定的全局形态判据仍然不应复活。新实现不是“凡纯拉丁行或以骰子结尾
+就保留换行”，而是先在整份文档的原始逐页文本上识别至少三行的紧凑机械值
+运行，再把确认的原始 span 带入 plain/trace 清洗。这样既能保护跨页的 2+1
+运行，也不会把 p9/p10/p13 那些恰好以骰子收尾的栏宽断句升格为表格。
+
+受控 18 页语料的实际结构命中为：`section_14=9`、`section_15=15`、
+`section_16=3`，其余页面均为 0。第 14 节的九条奖励行现在与 True End
+叙述分离；每条都生成一个带原始页码、raw start/end、exact text 和 heading
+scope 的 `table_row` DocumentBlock，并继续成为 SourceFactGraph 1.1 的
+source-exact statement 与 `follows` 关系。陷阱散文和只有两行的紧凑机械文本
+仍不升格。
+
+跨页判据必须在清洗每一页之前运行：`cleanPageText()` 的公开单页契约无法知道
+另一页是否补足第三行；生产入口因此统一走 `cleanPages()` 或
+`cleanPagesWithTrace()`。页首/页尾的空白行只在跨页连续性视图中忽略，原始
+文本、offset 和证据不改；页内空白仍是硬断点。把生产路径退回
+`rawPages.map(cleanPageText)` 会重新引入 2+1 焊接，应由现有回归拒绝。
+
+这里完成的只是“可寻址、可引用的表格来源”。`table_row` 本身仍是
+`semanticStatus=uninterpreted`，不能因为行里出现 SAN、CM、信誉或技能成长就
+直接执行奖励。奖励条件、数值表达、MechanicsIR 声明和 GameSession 持久结算
+必须经过后续显式、证据绑定且 fail-closed 的语义契约；其它 PDF 布局也仍需要
+各自的受控证据，不能拿本书的 9/15/3 命中数外推为通用准确率。
+
+**后续状态纠正（2026-09-20）。** 上一段所说的“后续语义契约”现已有一个受限
+实现：只有带可验证 heading scope 的 `table_row` 会成为 reward candidate，且必须
+再经逐行 `reward_binding` 才能进入 terminal reward catalog。结构层仍不解析
+`SAN +1d6` 之类文本，也不会因为表格形态自动执行；负向 SAN/疯狂副作用、技能
+成长和任意角色字段继续明确拒绝。因此本次接线缩短了 table evidence 到运行时的
+距离，但没有把特定版式识别器升级成通用奖励抽取器。
+
+### 不可回答的 generic discovery 改为来源事实处置（2026-09-23，纠正）
+
+此前把 `paragraph`/`list` 来源根永久留成 generic discovery 问题，会把“不能
+诚实地产生成发现动作”误记成“还缺一个总会有答案的问题”。现由
+`source_fact_disposition` 取代：queue 1.8、hints 2.0 和 report 1.1 对同一根给出
+显式处置。`source_only` 只保留来源层回答，绝不生成 runtime、IR、projection 或
+workbench 物；`mechanics_candidate` 是可审查的结构化候选，但在独立绑定被接受前
+仍是 pending，prepared readiness 仍为 incomplete。
+
+这不是把所有段落/列表都自动降级为已完成，也不是从散文猜机制。它只是让报告能
+区分 source-only、待建模的机制候选和真正已接受的绑定。当前 Fuzu prepared
+artifact 仍是 graph schema 1.0，已被现行 validator 拒绝；历史只读 artifact 的
+77 questions（其中 22 generic）只能用于说明旧问题形状。合成的一对一契约回归
+不能写成“现行真实 PDF 已重跑”或“当前来源已被接受”。
+
+### 真实复足读取→编译→运行质量的纠正（2026-09-23）
+
+上节关于旧 graph schema 1.0 artifact 的说法只保留为当时的历史纠正上下文；
+它不再是现行真实来源状态。本轮已从 SHA-256
+a774a2478962db7964b10e777a91cb8834a66020be29769493e52b94001235b5
+的 16 页复足 PDF 完整重跑：prepared source 有 22 scenes、3 clues、3 items、
+32 NPC anchors、72 reward candidates，queue 为 192/192 answered。
+
+现行 mechanics 为 mechanically_closed：4 playable scenes、3 connections、3
+discovery methods、2 reachable endings；closed-world 的四类 issue 均为 0。两条
+witness 都能 replay，artifact restore 后 canonical hash 一致；两个独立
+GameSession 分别到达 lost_without_dream_stone 与
+escape_with_dream_stone。
+
+aggregate quality 明确量的是内容宽度而不是 readiness：130 roots 中
+mechanics_evidence=22、accepted_binding=0、explicitly_unbound=108、open/unmodeled=0；
+coverage 为 scenes 22→4、clues 3→3、items 3→0、NPC anchors 32→0、rewards
+72→0、endings 2→2。它证明机械路径闭合，但同时证明内容宽度很薄，绝不是生产内容
+完成。
+
+operator workbench 与 final resolve 只返回 aggregate-only quality；它不是
+readiness 或 gate，也不返回 IDs、prose、evidence 或 witness。todo-64 仍为 open。
+完整 preflight exit 0：3533 tests / 266 files，3501 pass / 32 skip / 0 fail；
+typecheck exit 0、unwired=82、core.hooksPath 通过。DeepSeek-only llmEnabled
+遗漏已先红测后修复；本轮没有外部模型调用。
+
+### 同源 current-schema 复验纠正：拒绝旧 artifact 不等于来源不可重跑（2026-09-24）
+
+上一节对 graph-schema 1.0 prepared artifact 的拒绝仍然成立，但“本地没有
+原 PDF、所以 current acceptance open”的结论已失效。现已找到精确原件
+`C:\aitrpg\[kp进阶推荐模组]复足.pdf`：1,751,612 bytes、16 页、SHA-256 为
+`a774a2478962db7964b10e777a91cb8834a66020be29769493e52b94001235b5`。内部
+验收先校验 header/size/hash，再经 authenticated public HTTP PDF prepare、catalog
+load 与 current-schema restore 复验。旧 artifact 继续以
+`ARTIFACT_COMPONENT_VERSION_MISMATCH` fail closed；绝不能静默迁移，也不能由
+graph/text 重构冒充原 PDF。
+
+历史 50 条 human/user_document/explicit benchmark value 只在这一次验收中按
+kind + 唯一 current subject candidate（无 subject 时 singleton kind）严格重绑；
+这是重新审阅 current question/evidence，不是 production migration 或 fallback。
+结果必须同时诚实报告：50 answered、142 open、content incomplete；22→4 scenes、
+3→3 clues、3→0 items、32→0 NPC、72→0 rewards、2→2 endings。两个 witness 和
+两个 GameSession 可以机械执行，并不把 content incomplete 变成 complete。
+
+HTTP 读取边界也需与载荷语义分离：JSON/general 继续 server-owned 1 MiB，只有
+compiler prepare 的 application/pdf 为 8 MiB；PDF limit+1（包含 unknown-length
+stream）必须在 compiler/catalog 之前 413，JSON 1 MiB+1 仍拒绝。初版测试以
+top-level Bun mock 替代 compiler API，导致同进程约 100 个无关 suite failures；
+应改用真实 route/stream 断言，记录为测试隔离问题而不是生产 split-limit 失败。
+
+### 同源自动续解的 current-schema 边界（2026-09-24）
+
+同一份精确 Fuzu PDF 的 current artifact 现可在严格重绑 50 条历史人工答案后，
+通过 authenticated public `/api/compiler/auto-resolve` 继续完成其余真实 queue。
+这不是从 graph/text 重构来源，也不是迁移旧 artifact：旧 artifact 仍以
+`ARTIFACT_COMPONENT_VERSION_MISMATCH` 拒绝。deterministic FakeLLM 只依据每个
+实际 request envelope 的证据与 candidate domain 作答；在 server-owned 3
+questions/request、8 requests/round、2 rounds 的限制下，三次 continuation、48
+次调用后私有 hints 为 192/192，source disposition 的 open question/root/
+unmodeled root 都为零。
+
+这项“complete”是逐来源根处置完整，不是摄取或运行内容宽度完成。运行覆盖仍是
+22→4 scenes、3→3 clues、3→0 items、32→0 NPC anchors、72→0 rewards、2→2
+endings。原先的 automatic NPC eligibility 仅让 playable heading 的 anchor 被问，
+会让 27 个 non-playable Fuzu anchor 无法用空数组显式处置；修正后的
+ineligible/static_or_none/none_only 三态只允许后者 `presentNpcs: []`，并在
+accepted 边界拒绝任何正向 NPC。它没有把 dialogue、encounter、SAN 或
+presentation 解释成可自动从 PDF 散文生成的内容。
+
+公共响应继续只是 aggregate-only presentation draft，不含 hints、模型原文、
+audit、graph、artifact、source prose 或 continuation token。验收会从 prepared
+graph 的所有足够长 statement 动态取得泄漏探针，并让三次 HTTP 调用共享同一
+dependencies 与 process-local admission controller；因此既检验来源/载荷闭环，
+也不把一次临时 controller 的串行绿灯误写成生产复用证据。
+
+### 更正：Fuzu 的 72 条表格行不是 72 个奖励候选（2026-09-24）
+
+此前记录中的 72 个 Fuzu reward candidates 是旧实现把任意有 heading scope 的
+`table_row` 过度泛化后的历史计数，不是当前来源事实，也不是 72 个奖励。现行候选
+资格为 source-derived、fail-closed：只有带 scope、可由文本验证为已支持 SAN 恢复、
+固定 Cthulhu Mythos 或固定 reputation 的明确正向结算行，才会进入既有
+`reward_binding` 人工审阅；属性、HP、攻击、损失表述、百分比或斜杠混合值、无关行和
+无 scope 行都不进入。
+
+其余表格行不丢失也不重复：eligible reward row 只产生 reward binding；所有不合格
+表格行按既有 `source_fact_disposition` 作为 source root，并复用同一 statement、模型
+请求、parser、audit 与 report 契约。故这份精确 PDF 当前为 0 reward candidates、72
+条 table rows 走 disposition、queue 仍为 192，自动续解仍为 3 requests / 48 次
+deterministic FakeLLM calls，runtime rewards 为 0。该修正只提高类型/来源审计质量，
+不增加内容宽度、不证明成本下降，也不关闭跨 heading 实体/遭遇、真实复杂 PDF、真实
+模型、自动发布或 todo-64 的生产化总目标。
+
+### Reward predicate target-domain closure is a compiler request contract, not new source breadth (2026-09-24)
+
+The exact Fuzu acceptance continues to prepare **0 reward candidates** and
+runtime rewards: its table rows remain source-disposition roots. This new slice
+does not change that source fact. It closes the separate opaque-ID defect for a
+real `reward_binding` question: queue schema 1.9 serializes stable same-draft
+scene/clue/item predicate candidates; request-envelope schema 1.2 sends those
+typed candidates and includes them in chunk catalogs.
+
+MechanicsIR remains the only reward DSL parser. The shared compiler parser then
+recursively checks each supported `scene_visited`, `clue_found`, and
+`item_owned` reference under `all`/`any`/`not` against the prepared queue domain,
+rejecting forged and cross-domain IDs before downstream compilation.
+`declaration:null` remains an explicit source-only answer. A deterministic
+FakeLLM test builds the positive answer only from the emitted envelope/catalog;
+removing the domain walk turned the new regression red (14 pass / 1 fail / 82
+expectations), and restoring it returned 52 pass / 0 fail / 5 files / 511
+expectations plus typecheck 0.
+
+Current root verification is 3576 tests / 273 files / 3544 pass / 32 skip / 0
+fail / 20620 expectations. The real Fuzu acceptance remains 22 scene
+candidates / 4 playable, 3 clues/discoveries, 3 item candidates but 0 runtime
+items, 32 NPC anchors but 0 NPC/dialogue, 0 reward candidates/runtime rewards,
+2 reachable endings, 192 questions, and 3 requests / 48 deterministic FakeLLM
+calls. FakeLLM and disposition completeness do not establish real-model,
+complex-PDF, content-breadth, publication, or production completion; todo-64
+remains open.
+
+### Current exact Fuzu item evidence is not generalized ingestion (2026-09-24)
+
+The earlier 3→0 item and 48-call figures are historical pre-item-evidence
+snapshots, not current Fuzu output. The current exact PDF prepares 22 scenes, 3
+clues, 3 items, 32 NPC anchors, 0 reward candidates, and 192 questions. Fifty
+legacy answers plus two current human source reviews leave 52 answered / 140
+open; three bounded requests and 47 deterministic FakeLLM calls complete the
+192-question source disposition. Runtime is 4 scenes, 3 clues/discoveries, one
+loot item named 梦境之石, one bound static narrative_noncombat NPC, zero
+dialogue/encounter/reward, and two endings;
+the item-owned and item-absent GameSession paths take 4/3 actions.
+
+That NPC is 兰迪.帕蒂拉 from the 中庭 same-heading scope, preserved through
+sourceMap, projection, and GameSession; it has no talk or combat. A real
+`presentNpcs: []` mutation makes exact acceptance exit 1 with expected
+boundNpcAnchors 1 / received 0, then restoration exits 0. Root rerun is 26
+pass / 0 fail / 269 expectations and typecheck 0; baseline counts remain
+3586/273/3554/32.
+
+This relies on queue 2.0/hints 2.1/proposal request 1.3 candidate-local marked
+name/body `itemNameEvidence` for every positive item binding. Null declarations
+forbid it, and the exact evidence survives parser/audit, claims, resolved
+bindings, canonical regeneration, projection/sourceMap, and runtime display.
+An item question is sourced from that item itself, so damaged clue evidence
+cannot create a displayable loot name. These are source-bound compiler
+contracts, not an inference that other PDFs expose equivalent items.
+
+The ordinary intent API separately validates a strict action allowlist, exact
+keys, types/enums, and safe numeric values before accepting a model reply; it
+retains spell/luckSpend/weaponName/calledShot/item, warns on invalid replies, and
+uses the existing regex fallback. Its luck mock moves 10→7. It leaves compiled
+intent authorization unchanged. The pre-slice 3576 full run was green; the first
+post-implementation full was 3585 / 3551 pass / 32 skip / 2 fail; the repaired
+final is 3586 / 3554 / 32 / 0. Human review, deterministic FakeLLM, the expected
+no-key warning, and this one PDF do not prove an external API, real-model,
+arbitrary-PDF, automatic-content, or production workflow; todo-64 remains open.
+
+Final root verification is `bun test` exit 0: 3586 tests / 273 files / 3554 pass / 32 skip / 0 fail / 20644 expectations in 75.24s. Final `bun scripts/preflight.ts` exits 0 with 205 boolean implementations / 0 discarded returns, typecheck 0, baseline tests/files, unwired 82, and `core.hooksPath=.githooks` matching. Expectations are evidence only; todo-64 remains open.
+
+### Prose relationship evidence can become a reviewed dialogue clue, not a guessed fact (2026-09-24)
+
+The source graph's independently answerable NPC anchor paragraph can now carry
+a human-reviewed dialogue declaration whose `relationshipEvidence` is a
+source-exact, non-name substring in that paragraph. It is not an alternate
+location lookup or a generic prose question. Queue 2.1/hints 2.2 derive the
+new clue identity, heading-scope location, mechanics target, and the sole
+`discover_clue` effect from the graph and anchor. The answer cannot nominate a
+clue ID, target, location, or an `acquire_item` effect, and cannot carry
+failure/failback effects. Missing or forged anchor/quote evidence fails closed.
+
+The source exactness remains visible through accepted interpretations,
+MechanicsIR, projection/sourceMap, canonical replay, quality reporting,
+GameSession, and durable restart. This keeps a relationship proposition
+separate from a structural location-plus-item clue. Proposal request 1.4 and
+automatic proposal validation deliberately continue to reject all dialogue and
+encounter declarations; the new route requires human review rather than asking
+the model to manufacture narrative mechanics.
+
+Capabilities are versioned rather than inferred from a current-version
+comparison: null items 1.9+, source-fact dispositions 2.0+, positive exact item
+names 2.1+, explicit dialogueMethods 1.7+, and prose-only dialogue 2.2. The
+audited old `!== current` version decision red-tested at 14 pass / 1 fail; the
+old prose failure-effect injection red-tested at 5 pass / 1 fail; removing exact
+quote validation also made its negative case red. Restoring the code returned
+green.
+
+The exact Fuzu input remains intentionally unchanged as a dialogue-breadth
+control: Randy's valid courtyard presence is static, and the scene's terminal
+priority leaves no talk interval. Current output is still 52 reviewed / 140
+open, then 3 deterministic continuation requests / 47 FakeLLM calls to 192 / 0;
+runtime stays 4 scenes, 3 structural clues, 0 prose dialogue clues, 3
+discoveries, one item, one static NPC, 0 dialogue/encounter/reward, and two
+endings. This does not claim that general PDF prose is automatically usable.
+Root verification is 101 pass / 0 fail / 12 files / 882 expectations, typecheck
+0, and full test exit 0: 3593 tests / 274 files / 3561 pass / 32 skip / 0 fail /
+20724 expectations in 76.16s. Final preflight exits 0: generated-document
+reference checks pass, boolean implementations are 206 with 0 discarded
+returns, typecheck 0, tests/files 3593/274 and unwired 82 match the baseline,
+and `core.hooksPath=.githooks`. Todo-64 remains open.
+
+### Fuzu source-only roots are a granularity control, not missing transition coverage (2026-09-24)
+
+Queue/hints 3.1 can now compile a root-exact same-heading source fact into a
+bounded `scene_state_transition`, and proposal request 1.7 can expose that form
+only under a trusted opt-in. That capability does not make every narrative
+sequence an automatic clue discovery. In the exact Fuzu input, the two real
+source-fact roots describe approach/visible context, while their candidate
+clue bodies also contain search, medical, inspiration, photography, or
+electrical-repair detail. Automatically discovering the whole canonical clue
+would erase those gates and overstate the source. Both roots therefore remain
+`source_only`; the positive transition acceptance stays on a synthetic fixture
+whose root and canonical output truly coincide.
+
+The current exact run has 194 questions: 192 answered and two child questions
+made not applicable by their source-only parents, using 47 deterministic
+FakeLLM calls. Runtime breadth remains 4 scenes, 3 clues/discoveries, one item,
+one static NPC, no dialogue/encounter/reward, and two endings. That is useful
+negative evidence for source granularity, not arbitrary-PDF, real-model, or
+high-fidelity content acceptance. It also identifies the next ingestion design
+problem: visible clue shells and gated detailed findings may eventually need
+separate canonical facts rather than an automatic transition that grants both.
+
+Final verification is focused 51/0, wider compiler 207/0, HTTP 57/0, and,
+after the public request-prompt correction, full `bun test` exit 0 with 3634
+tests / 278 files / 3602 pass / 32 skip / 0 fail / 21198 assertions in 84.90s.
+The enforced baseline advances by +10 tests / +1 file / +10 pass over
+3624/277/3592/32; unwired remains 82. No external model endpoint was called.
+Todo-64 remains open.
+
+### Clue bodies must be partitioned before they become runtime facts (2026-09-24)
+
+The prior Fuzu granularity note identified a real leak: the structural clue
+`劳伦的尸体` mixed visible description with a Medicine conclusion, and `大圆环`
+mixed visible detail with an Inspiration conclusion. Treating either whole body
+as the shell made a mechanically valid runtime disclose facts before their
+source-required checks.
+
+Draft 1.4 now derives source-exact body atoms. Queue/hints 3.2 asks one complete
+`clue_fact_facets` partition per marked clue: every atom is shell, belongs to
+one gated finding, or stays source-only. The atom set is not semantic guesswork:
+each quote maps to a raw page span inside the canonical body envelope, source
+order and non-overlap are checked, and the ordered quotes must reconstruct the
+whole body modulo whitespace. Missing, reordered, overlapping, or out-of-body
+atoms fail closed. A bracketed check result is independently atomized rather
+than inheriting the visibility of adjacent prose.
+
+Exact Fuzu now has three shell clues plus two gated findings. Entering the first
+scene reveals only the corpse and circle shells. Medicine and Inspiration are
+separate checked discoveries; failures do not reveal them and fresh successes
+do. `屋子周围` keeps its source-required detailed search and yields the dream
+stone as shell content rather than inventing a second Spot Hidden gate. The
+camera paragraph still lacks a canonical clue and remains source-only. This
+raises semantic fidelity but does not increase the narrow document's scene,
+NPC, dialogue, encounter, or reward breadth.
+
+### Source coverage and source disposition/closure are separate claims (2026-09-24)
+
+Source coverage counts candidate material and runtime dispositions; it does not
+by itself prove that a source fact has a safe executable interpretation. A
+closed source-disposition report can therefore be honest about every root being
+accepted, explicitly unbound, or source-only while the resulting runtime is
+still narrow. Conversely, a new playable scene or bound NPC needs its own
+source-local evidence and canonical validation; it cannot be inferred from an
+aggregate coverage improvement.
+
+An exact positive NPC may be model-proposed only from the same actual
+NPC-binding request envelope: the candidate domain, source statement, exact
+name, and exact relationship evidence must all already be present there. The
+model does not choose runtime IDs, mechanics, effects, location, or authority.
+The canonical compiler derives those values and validates the proposal, policy
+approval, producer provenance, and exact citations before it can affect
+projection or GameSession. The current Susan acceptance follows that restricted
+path; it is not a new human answer and does not make prose dialogue generally
+automatic.
+
+Changing an internal deterministic acceptance fixture can establish the
+prompt-envelope and canonical-validation contract. It cannot establish that a
+real external model will propose a semantically sound answer, nor that another
+PDF supplies equivalent evidence. Treat source coverage, source disposition,
+closed-world reachability, and real-model quality as separately measured
+properties rather than evidence that automatically transfers between them.
+
+### SAN declaration evidence is question-local consumption, not an event citation (2026-09-24)
+
+An accepted parsed `sanity_check` must now consume canonical exact SAN/理智
+slash evidence from a real source statement in that question's
+`sourceStatementIds`. `twice`/`两次` requires two pair consumptions. The check
+uses a question-scope multiset, rejects a missing graph or insufficient real
+pairs fail closed, and does not claim that each later runtime event has its own
+citation. Numeric bounds remain the existing MechanicsIR parser's authority;
+the source gate only verifies that a legal declaration is grounded in the
+question's real statements.
+
+The dedicated 7-test SAN file was red with 4 failures both before the repair
+and when its `validateSanityCheckSourceDeclarations` call was temporarily
+removed; restoring it is 7/7 green. Directed verification is 52 pass / 0 fail
+in 6 files with 331 assertions; typecheck exits 0. Root-authoritative full
+test is 3647 tests / 279 files / 3615 pass / 32 skip / 0 fail / 21251
+assertions in 112.64s. This source-fidelity correction does not prove
+arbitrary-PDF ingestion, real-model quality, or broad content coverage:
+todo-64 stays open.
+
+### Exact Chinese SAN grammar reaches the Fuzu opening route (2026-09-24)
+
+The current exact Fuzu PDF supplies a concrete source format that the former
+label-plus-bare-pair matcher could not bind:
+`观影完毕之后，调查员们需要投理智鉴定（1 / 1d3）`. The supported grammar is
+intentionally small and fail closed: `SAN` or `理智`, an optional
+`loss`/`损失`/`鉴定` marker, then a contiguous `a / b` loss pair either bare or
+inside matching ASCII/Chinese parentheses. Recovery text, unlabeled pairs,
+unclosed parentheses, interrupted pairs, and another question's statement are
+not declarations. This is source tokenisation, not a second mechanics parser;
+MechanicsIR alone remains responsible for numeric bounds and legal loss forms.
+
+The exact pair is consumed from the topology question's own source statements
+as a multiset. One source pair supports one declared `sanity_check`; repetition
+needs a second source pair, so an answer cannot reuse nearby text or borrow it
+from another question scope. This retains the existing source-bound execution
+path rather than creating a Fuzu-only runtime path.
+
+The acceptance changes only current queue answers: `电影时间` is playable and
+is entry; its one `film_to_night` connection leads to `黑夜中的尖叫` and carries
+the exact 1/1d3 `sanity_check`. `欢迎来到曲径旅店` remains non-playable because
+its source scope is hotel layout/equipment description rather than a declared
+opening event. The two ending witnesses now take 5/4 player actions and each
+traverses Film → Night exactly once. GameSession records one settlement per
+such action, with declared fixed-1/dice-1d3 loss, applied loss in 1..3, valid
+before/after SAN hashes, and a real SAN decrease. The optional doctor path is
+also required to pass through Film → Night first.
+
+Red evidence is concrete rather than inferred: changing expected playable
+coverage to six makes the old fixture fail; temporarily restoring the older
+Chinese matcher rejects the new parser and resolver case; removing the Film
+traversal SAN effect makes exact acceptance fail. Restoration is green. The
+root-authoritative full run is 3649 tests / 279 files / 3617 pass / 32 skip /
+0 fail; typecheck exits 0. This exact-source acceptance remains bounded to one
+PDF and deterministic FakeLLM review. It does not establish arbitrary or
+complex PDF parsing, real-model semantics, broad runtime content, automatic
+publication, or production completion; todo-64 remains open.
+
+### Actor-effect provenance uses canonical source spans (2026-09-24)
+
+A quoted string is evidence, not declaration identity. The compiler must find
+the quote uniquely in its source statement, parse the canonical declaration at
+that absolute source location, and consume the resulting statement-plus-span
+identity. This prevents overlapping quotations, or a truncated quotation that
+hides a declaration's adjacent repeat marker, from creating extra SAN
+capacity. Repeat capacity belongs only to the declaration itself, never to
+unrelated `twice`/`两次` language elsewhere in the quote.
+
+Capacity is a property of the complete effective resolution set, not an
+individual question. Per-question candidate/slot validation remains local,
+but all answered and incoming valid resolutions share the same declaration
+ledger. Event slots are similarly evidence-bearing identities: ambiguous
+connection target slots and multi-meaning checked branch wording fail closed
+rather than being inferred from a connection ID or a convenient substring.
+
+### Clean-clone Fuzu review input is a compact fixture (2026-09-24)
+
+An exact-PDF benchmark must not secretly require ignored local analysis
+artifacts. The Fuzu acceptance now retains its 50 human judgments in a non-ignored,
+trackable
+9,965-byte fixture that names only the current question ID, kind, value, and
+short reason, alongside exact document/module/graph/queue identities. Fresh
+prepare rebuilds statement/evidence provenance and fixed human authority; the
+fixture is not allowed to carry those trust-bearing fields.
+
+Queue hash or schema drift, source-graph/document mismatch, duplicate or
+unknown question IDs, kind mismatch, unexpected fields, or any deviation from
+the fixed kind distribution fail closed and require human re-review. This is a
+benchmark-input closure, not an automatic review workflow and not a claim that
+one supplied PDF represents arbitrary ingestion or real-model quality. The
+fixture is currently untracked and requires a later authorised commit before a
+clean clone can consume it.
+
+The root-authoritative full suite after this input-closure change is green:
+3664 tests / 280 files / 3632 pass / 32 skips / 0 fail / 21,288 expectations
+in 94.70s. It validates the tracked benchmark contract, not arbitrary-PDF or
+real-model ingestion quality.
+
+### Cross-section entity profiles preserve location authority (2026-09-24)
+
+Cross-section entity/profile binding needs two independent exactness checks:
+the anchor paragraph must contain the candidate profile heading's trimmed name
+exactly, and one profile heading must independently contain complete
+parser-accepted HP, dodge, fight, and fixed-or-dice damage evidence. Evidence
+from two profiles cannot be mixed, and the selected NPC name quote must equal
+the selected profile heading rather than merely contain or target it.
+
+A profile expands encounter stat evidence only. Location-derived scene,
+auto-start, and victory clue/item effects remain attached to the anchor's
+actual heading, so a character sheet cannot grant loot or clues from another
+section. Rebuilding the queue domain from the source graph must be equivalent
+to the draft's evidence spans; answer-provided IDs never enlarge that domain.
+Finally, a queue prompt is part of the queue's hash identity. A capability
+extension must leave documents without newly eligible candidates on the
+byte-for-byte legacy prompt/hash rather than introducing a universal prompt
+rewrite.
+
+Source domains that deliberately contain both an anchor/location heading and
+an alternate profile require a separate owner reconstruction for any scene
+policy. Never choose the first ordered source heading. Rebuild the canonical
+location scene from the NPC question's anchor paragraph and its parent heading,
+then exact-match that scene against the relevant role. The profile remains
+evidence for human-reviewed encounter stats; it does not acquire automatic
+encounter authority or change the location's gameplay eligibility.
+
+### Automatic encounter evidence has one source owner and a narrow threat grammar (2026-09-24)
+
+An automatic source-exact NPC encounter may use only a uniquely reconstructed
+owner/profile domain. The canonical location is reconstructed from the NPC
+anchor paragraph and its parent heading; a profile is never selected by source
+order. A direct profile must provide exactly one complete HP/dodge/fight/damage
+set in the anchor paragraph. For an alternate profile, the anchor must contain
+the trimmed profile heading exactly, the name quote must equal that heading,
+and all four stat facts must come from that one scope. Multiple profiles,
+duplicate names, mixed owners, and incomplete or ambiguous evidence remain
+unavailable rather than being resolved by a heuristic.
+
+The encounter trigger is evidence in its own right, not an inference from a
+combat-looking profile. It must be a non-empty bounded exact anchor-paragraph
+substring, distinct from the name quote, that explicitly names the NPC and
+matches the intentionally narrow immediate positive-hostility grammar.
+Friendly, negated, conditional, delayed, self-defence, ability-description,
+and third-party-attack text is a deliberate false-negative boundary. A
+server-owned policy may expose this closed domain only through the automatic
+encounter capability; source text, request bodies, and model output cannot
+expand it. The compiler then derives the runtime shape from the accepted
+evidence instead of treating prose as a caller-authored combat program.
+
+### 纠正：普通散文 finding 是原子分区，不是自由技能推断（2026-09-25）
+
+`成功的知识鉴定后...` 的 source-exact `prose_fact_finding` 不能复用“看起来像
+clue”的宽松路径。draft 1.5 先由 server 生成 atom/candidate/check/heading location，
+queue/hints 3.4 只接收互斥 ID-only partition；scene identity 从 canonical heading
+派生，caller 不可指定。未显式启用 trusted server policy 时维持 default deny，真实
+HTTP 的两轮自动处理也不接受人工 hints 作为旁路。
+
+这条边界必须一路复验到 projection/sourceMap/GameSession，而不是只在 parser 绿时
+停止。删除 same-heading gate、删除 prose parser、或允许 free-form skill 都应变红；
+还原才说明“散文 finding”没有变成泛化的内容猜测。Fuzu 的 643 reachable states / 1,000
+limit 只证明当前 fixture 可分析，323 -> 643 约 1.99x 的增长也说明 state-relevance
+pruning 仍是下一项生产边界，不能由单一真实 PDF 代替第二真实模组、OCR 或真实模型验收。
+
+### 纠正：摄取事实的可见性不等于 control-state 相关性（2026-09-25）
+
+source/extraction 层不能因为 finding 是 prose 或 dialogue 就默认把它从状态键删掉。只有
+编译后的 control 语义同时证明它非 core、没有 predicate/reward consumer、只由自身 discovery
+产生、且没有 failure/failback/额外 effect 时，report 1.1 才能把它折叠为 quotient state。
+Fuzu 的 camera prose finding 和 NPC dialogue finding满足的是这组交集，不是“文字类 finding
+都不重要”的泛化规则。
+
+因此 report edge 只记录 quotient representative evidence；它不是完整 full-hash adjacency，
+也不能作为摄取覆盖率或运行时 hash 不变的替代判据。1.0 report 被 fail-closed，500-state cap
+仍是有限预算。第二真实模组、任意/复杂 PDF、OCR 与真实模型仍需独立验收；notes index 刷新按
+共享 worktree 边界延后，本追加条目暂为已知索引滞后。
+
+### 纠正：精确 Fuzu 验收必须以实际 queue 和隔离资源为准（2026-09-25）
+
+真实 PDF acceptance 的隔离不是“换一个临时目录”就成立。此次验收曾把 auto-admission
+错落到默认 catalog root，因而得到 503；另一个断言把初始 open 数硬编码为历史 `138`，而当前
+实际 queue 是另一数值。两者都可能让 harness 的结论漂移，不能据此判断 source-to-runtime
+产品链。现已把 admission 明确绑定到该 acceptance 的临时 catalog root，并从本次 prepared
+queue 派生初始 open set。
+
+自动 continuation 的进展也必须是编译状态事实，而不是输入容器事实。一个合法但没有 accepted
+resolution 的 explicit-hints pass 既不能算 progress，也不能写 continuation；malformed hints
+必须走 typed draft-only 拒绝，不能因强转逃逸为 HTTP 500。FakeLLM 同时必须传递原始
+AbortSignal；克隆信号会把真实取消/未取消语义改写成偶发 `llm_call_failed`。
+
+修复后的根代理精确 run 对 16 页、1,751,612-byte、SHA-256
+`a774a2478962db7964b10e777a91cb8834a66020be29769493e52b94001235b5` 的 Fuzu 输入 exit 0：
+197 questions、195 answered / 0 open / 2 N/A、3 requests / 46 deterministic FakeLLM calls、
+`mechanicallyClosed`、227 control states、2 reachable endings 和 2 个真实 GameSession witness
+replay。default-root fallback、AbortSignal clone、empty-accepted progress 与 malformed-hint coercion
+均做了真实变异，目标回归先红后恢复绿。这仍只证明一个受控、确定性 review 的精确文档链；不代表
+任意/复杂 PDF、OCR、第二真实模组或真实模型语义质量。`docs/notes/index.json` 正在并行修改，
+本追加条目不刷新该索引。
+
+### 纠正：Fuzu 的 durable witness 必须从 catalog 重新执行（2026-09-25）
+
+受控真实文档的闭环不能只保留一次内存中的分析结果，再把结论写成 durable 证据。
+本轮 Fuzu 验收从 catalog 读取已编译 bundle，写入 durable snapshot，并从该 snapshot
+逐步重建每个 transaction；两条声明 ending ID 都由真实执行抵达，exit 0。这证明的是
+该确定性 catalog-to-runtime 路径的可回放性，仍不外推到任意/复杂 PDF、OCR、第二真实
+模组或真实外部模型质量。
+
+durable snapshot 以精确 `bundleHash` 绑定 bundle 身份，不能仅靠 module、artifact 或
+mechanics 标识相同就接受恢复。与摄取边界相邻的作者模块入口也已收紧：全局
+`/api/modules` 为 operator-only，安全单段 ID 和解析后目录 containment 共同阻止
+路径逃逸；无认证 legacy global `/api/characters` CRUD 已退役，session-bound 路径保留。
+根代理记录 typecheck exit 0 与完整 `bun test` 3965 tests / 306 files / 3933 pass /
+32 skip / 0 fail；root-authoritative `bun scripts/preflight.ts` 同样 exit 0，报告
+typecheck 0、258 boolean implementations / 0 discarded returns、unwired=75 与
+`core.hooksPath=.githooks`。总体生产目标仍 open。`docs/notes/index.json` 有并行改动，
+本条目不刷新索引并明确该滞后。
+
+### 公开 PDF prepare 必须在 durable publication 前隔离解析与重建（2026-09-26）
+
+仅限制 HTTP body 大小不能约束压缩 PDF 解码后的文本、页数、graph/queue 数量或 artifact 大小。当前 prepare 以本地有界 admission 运行 parser child 与 validator child，固定检查 raw bytes、页数、单页/总 UTF-8 文本、blocks/statements、candidates/questions、artifact bytes 和时限；parent 绑定原始 bytes hash，validator 独立重建并 reseal，只有一次性 receipt 能进入 catalog 的 prevalidated publication。
+
+真实的一页 Flate/Type0 PDF 可从小输入膨胀为 4.1M 字符；它现在以 `PREPARE_RESOURCE_LIMIT_EXCEEDED/page_text_utf8` 返回 422，且 catalog 零写入。257 页用例在任何 `getText` 前拒绝。超时/abort 会 hard-kill 并等待 exit 与 stdout/stderr drains 后才释放 admission。这个边界仍不是 OS job/container 的硬内存隔离，catalog load/GET 也仍会在 host 进程恢复已受限 artifact；精确 total/structure/artifact 边界矩阵和宿主 OOM containment 继续开放。`docs/notes/index.json` 有并行改动，索引刷新延后。
+
+### 不可精确分割的来源正文应阻断发布，不应阻断 prepare（2026-09-26）
+
+Barn 的真实 18 页来源暴露了生成与复验的契约矛盾：遇到未闭合括号等无法从 raw spans 独立精确重建的 marked body，模板会有意给出空 clue-fact atom domain；旧 queue validator 随后又要求全部 atoms 拼回正文，使整个 PDF 在 prepare 阶段被拒绝。正确边界是从同一 graph 重算：确实得不到任何 atom 时允许空 domain 留在 publish-blocking queue，任何 hint 都以 `unpartitionable_clue_body` 拒绝；可分割正文若被篡改为空 domain 仍拒绝。这样解析证据保留下来，但不会把不可靠切分升级为机制。
+
+受控 Barn corpus 现稳定得到 49 scenes、30 clues、30 items、63 NPC anchors 与 410 questions；空 hints 仍是 384 open / 26 deferred / 130 publish blockers 的 `draft_only`，不生成 MechanicsIR，也不复用手写 Barn runtime。恢复旧 validator 的真实实现变异使新增回归按原错误转红，精确还原后绿。`docs/notes/index.json` 因并行改动继续延后刷新。
+
+### 纠正：跨页正文的 punctuation atom 仍可独立精确分区（2026-09-27）
+
+前两节把 Barn 的两个空 `clue_fact_facets` domain 归因于未闭合括号或
+“不可独立分割”，并进而称任何 reviewer 都不能回答、必须重建
+document/graph identity；这套结论已被替代。原始 evidence 不是缺失：两个
+marked-body 句子跨页。`deriveClueFactAtoms` 把从标点得到的 semantic range
+整体传给只能验证同页 envelope 的 `atomEvidence`，于是 whole-body lookup
+all-or-nothing 地返回 `[]`。
+
+正确的边界是 **semantic punctuation × continuous evidence-page group**：先按
+语义标点划分候选区间，再且仅再在连续 evidence page group 的边界切开。每个
+产物仍须是 canonical body envelope 内的一个 exact raw span，维持 source
+order、non-overlap 与 whitespace-normalized reconstruction。不得按视觉行切碎，
+不得将一个 quote 扩成 multi-span，不得补 target/location fallback，也不得为此
+放宽 queue validator、修改 DocumentIR、source graph 或 hint schema。
+
+因此 Barn 从 72 增至 81 atoms，30/30 `clue_fact_facets` 有封闭、可回答的
+domain；410 questions、384 open/26 deferred 和 130 publish blockers 不变。
+这是派生 queue/artifact identity 的变化，不是来源身份变化：documentHash 和
+sourceGraphIdentity 保持不变；旧 queueHash
+`2758eb7372b9e5c4272c0aaf3da7b367458968304823196939d8ee325473b749` 变为
+`5937a83736ae1d149dab41077c634e70a7d46bec11d16f46e43b6e57655ec558`，新的
+prepared artifactHash 是
+`22f5d503fe77295a07980d8f67c1116ee855afa7f6e2cafc7b6ceaec4a207e6b`。旧 queue
+和 hints 必须 stale/fail-closed，不得迁移或重解释。
+
+这只把两个问题从 unanswerable 变为 answerable-but-unreviewed：空 hints 仍
+`draft_only`，不会造出 MechanicsIR、runtime 或 publication；也不能复用手写
+Barn/Fuzu 答案。真实旧路径变异使 synthetic cross-page 断言以 `atoms=[]` 变红，
+并使 Barn 72 而非 81 变红；精确还原后定向 33 pass / 4 files / 278 expectations。
+`docs/notes/index.json` 有并行改动，本条不刷新索引。
+
+### prepare 成功不代表当前证据已经可被 reviewer 回答（2026-09-26，已被上述跨页纠正替代）
+
+对 Barn 410 题的只读复核显示，两个空 clue-fact atom domain 不只是“等人审批”：解析器会对任何答案稳定返回 `unpartitionable_clue_body`。因此真实模型或人工 reviewer 也不能在当前 queue identity 上闭合它们；强行标记 `human`、套用手写 Barn 数据，或给唯一选项补一个未经证明的 `deterministic_rule` 都会制造假权威。
+
+合法下一步是回到原始 evidence segmentation，为两段正文建立可独立复算的 exact spans，重新 prepare 并获得新的 document/graph/queue identity，再让独立 reviewer 回答新 queue。现有 trusted-presentation workbench 位于 resolved artifact 之后，不能倒过来替代 mechanics review。相关 Barn/Fuzu/runner 与 queue/proposal/closure 离线审计 96 pass；未上传原文，索引刷新继续延后。
+
+**2026-09-27 superseded note.** 以上两段保留为当时空 domain 的 fail-closed
+判断记录，但“重新建立 spans / 重建 document/graph identity”已被证明不是所需
+动作。修复已有的跨页 evidence-group 切分后，两个 domain 均可回答；需要的是
+新的 queue/artifact identity 和独立 review，而非新 document 或 graph identity。
+
+### legacy scene clues are populated, but remain unreviewed drafts (2026-09-29)
+
+`build-scenes` begins each scene with `clues: []`, but that is not the final
+pipeline result: `pipeline → buildClues` later fills those arrays by the real
+`sceneId`. The historical “all scenes have zero clues” premise is therefore no
+longer the current ingest problem.
+
+That does not make the legacy output runtime-ready. `buildClues` deliberately
+leaves `findMethods` and `unlocks` empty, uses `importance: "color"` with a
+warning, and thus produces an unreviewed draft. A runtime package with no
+runtime configuration fails closed before writing. The primary compiler uses a
+separate DocumentIR → graph → templates → queue → MechanicsIR route; guessing
+legacy fields to fill the gap would create a second authority.
+
+The next decision is architectural: retain legacy clues as drafts only, or
+define one controlled bridge into the compiler. It is not a small field-fill
+task and remains open.
+
+### Source-validated prose finding must not require an absent presentation slot (2026-10-10)
+
+A safe Fuzu diagnostic reached the real trusted-projection boundary and
+reported `missing_binding clues.source_prose_clue_9eb469fd77a9a69824b7cec8.name`.
+The trusted review plan intentionally contains slots only for `prose_dialogue`;
+it has no slot for `prose_fact_finding`, whose selected atom, remaining
+source-only atom partition, scope, and fixed compiler-derived finding mechanics
+were already accepted and revalidated from the queue/artifact. The bug was the
+later trusted projector demanding three review quotes for that absent name,
+description, and revelation slot.
+
+The repair is deliberately subtractive: remove only those three impossible
+quote reads. Do not add a human-review slot or let presentation choose a new
+source quote. Display fields continue to derive from the canonical selected
+atom, and sourceMap continues to carry the accepted question/claim/source
+evidence. The parallel multi-atom clue-facet route keeps its source-ordered
+all-atom display and per-atom provenance; one review quote must not collapse it
+or disclose source-only atoms.
+
+The in-memory `synthetic_pages` fixture invokes the real prepare → queue/hints
+→ resolve functions, but is neither a PDF nor a model-proposal run. It was 10
+pass / 1 fail / 99 assertions / EXIT=1 before the repair, 11 / 0 / 113 /
+EXIT=0 after, 10 / 1 / 99 / EXIT=1 when the three reads were restored, and 11
+/ 0 / 113 / EXIT=0 after restoration. Root independently recorded 19 pass / 2
+files / 0 fail / 171 assertions in 2.63s and typecheck 0. Forged or foreign
+candidate/atom/quote, incomplete or duplicate source-only partitions, wrong
+scope/check/mechanics, artifact tampering, and review bindings outside the
+plan remain fail-closed. Preflight 66130 was before the fix and failed at the
+Fuzu HTTP case (5,505 tests / 5,466 pass / 1 fail; typecheck 0,
+`unwiredMethods` 39, `.githooks` correct); its file/skip summary is not
+guessed. The owner initially ran the focused Fuzu receipt case as 95678: 1
+pass / 13 filtered / 0 fail / 6 assertions / 1 file / EXIT=0 in 199.97s.
+Removing the temporary duplicate restore/project debug helper gave 94506 green
+in 194.60s. It invokes the in-process `handleRequest` chain with a fake
+provider and no fetch: that is neither a TCP-listener nor a real-model result.
+It covers trusted publication plus duplicate/restart receipt replay with one
+call and script-local g0→g1 checks.
+
+The execution-path mutation 40971 changed the first opaque-action POST followed
+by the same-session GET view. It went red at 0 pass / 1 fail / 13 filtered / 2
+assertions / EXIT=1 in 144.69s, with
+`fuzu_http_narration_receipt_mismatch` rather than a 404. Restoring the POST
+gave 21209 green at 1 pass / 13 filtered / 0 fail / 6 assertions / EXIT=0 in
+193.56s. Root independently reran elevated 68983 at 1 pass / 1 file / 13
+filtered / 0 fail / 6 assertions / EXIT=0 in 201.43s; latest root typecheck is
+also 0. This diagnostic execution-path mutation is separate from the
+production-core three-review-quote mutation (10 / 1 red, then 11 / 0 green).
+
+The focused case had a 240-second testcase allowance before final owner green;
+Bun synchronous CPU is not preempted, so this is not a hard wall-clock limit.
+The live 180-second limit is an external-request admission budget. Offline
+`externalCalls=0` and `liveDeadline=false` do not prove a runtime below 180
+seconds. Root's default `bun test` 76180 then terminated EXIT=0: 5,505 tests /
+504 files / 5,467 pass / 38 skip / 0 fail / 37,129 assertions / 959.32s. This
+is +5 tests / +0 files / +5 pass over 5,500 / 504 / 5,462 / 38 / 0, with skips
+unchanged and `unwiredMethods` still 39. It is default `bun test`, not a
+`--parallel` variant. World-guard/Fuzu coverage shares existing files, so no
+unverified per-case attribution is made. Root's final standard preflight 42057
+terminated EXIT=0 with the full 5,505 / 504 result matching
+baseline, typecheck 0, `unwiredMethods` 39, correct `.githooks`, and boolean
+implementations/ignored returns 360/0. This is not autonomous two-PDF
+publication, live quality, real world-binding, or production-goal completion
+evidence. The separately started internal HTTP campaign-runner batch is not
+covered by this record.
+
+For later sizing only, fresh pinned-PDF `--prepare` completed with
+`externalCalls=0`: Fuzu has 197 total questions with 49 publish-blocking, and
+Barn has 410 with 130 publish-blocking. Both remain closed=false; this proves
+fresh preparation and isolation only, not autonomous publication. The remaining
+legitimate draft warnings are not mandatory answers. The current pilot cap of 3
+questions/request × 8 requests × 2 rounds = 48 per module is below each
+blocking count, so it is not complete automatic-compilation acceptance and does
+not justify changing limits or a baseline.
+
+### Internal two-module HTTP campaign workflow is not an HTTP-host acceptance (2026-10-10)
+
+The frozen two-file campaign runner has owner verification at 16 pass / 78
+assertions / EXIT=0 plus typecheck 0. Root independently recorded 16 pass / 1
+file / 78 assertions / EXIT=0 in 199ms and typecheck 0; final review passed.
+The executable no-op was red first at 4 failures / 4 expects / 1 file / 51ms /
+EXIT=1, a new workflow-test control rather than an old compiler failure.
+Cancellation-token rejection, no-progress stop, identity isolation, and a
+published-status misclassification were each real EXIT=1 mutations and were
+restored. A fifth mutation omitting `autoContinuationId` from the continuation
+body was red at 15 pass / 1 fail / 66 assertions / EXIT=1; restoration was 16
+pass / 78 assertions / EXIT=0 in 202ms. Regressions also cover a duplicate
+continuation dispatching one extra request, ABA, legal closed `progress:false`,
+invalid cap default widening, and throw/JSON elapsed paths that redact
+unrecognized error codes.
+
+It uses only the existing injected `/prepare` and `/auto-resolve` contracts,
+with the catalog's 24-character base32 opaque IDs and one all-run
+token-to-module ownership map. Its HTTP attempt budget neither counts provider
+retries nor actual fetches; `reportedProposalCalls` is public adapter accounting
+only. No review, resolve, bundle, or session route is exercised. This remains a
+fake-transport unit workflow, not actual-PDF HTTP or model-quality acceptance.
+The temporary-catalog/shared-admission/actual-handler/offline-LLM host slice is
+next and unverified. The prior 5,505 / 504 full and preflight evidence therefore
+does not cover these 16 new tests; a new full suite and final preflight remain
+pending. Autonomous two-PDF publication, live quality, and actual world-model
+binding remain open.
+
+### In-process two-PDF HTTP host: offline wiring only (2026-10-10)
+
+The following host slice is frozen and root-reviewed: 20 pass / 2 files / 104
+assertions / EXIT=0 in 2.60s, with typecheck 0. It creates a temporary catalog,
+uses the same admission controller, and invokes the actual in-process compiler
+HTTP handler; it does not start a listener. It also does not call `loadConfig`,
+instantiate `LLMClient`, or consume provider credentials. Bun may auto-load
+`.env` through `src/config.ts`, but this host neither reads nor outputs that
+file; its injected fake LLM always returns invalid `{}` and fetch-dispatch
+attempts are zero.
+
+Session 73831 exercised the two pinned PDFs offline: Fuzu and Barn each made
+one automatic attempt and ended `stopped_no_progress`, with two reported
+proposal calls per module, four fake-LLM calls total, one shared controller,
+and temporary cleanup removed. Their prepare/automatic times were Fuzu
+1818/1720ms and Barn 2607/6304ms. Invalid `{}` deliberately yields no
+validated progress, so this is not autonomous publication or model-quality
+evidence; it touches no review, resolve, bundle, or session route.
+
+Three real mutations were restored: fixed-503 transport replacement was
+1 pass / 2 fail / 5 assertions across 3 tests; per-request admission was
+2 / 1 / 14; and removed exception cleanup was 3 / 1 / 25 with the directory
+actually left behind. Restoration gave 4 / 0 / 26 in 2.78s before root's
+20 / 0 / 104 run. A 5xx/throw has no public `awaitIdle` proof that the actual
+handler drain has ended, so cleanup is deliberately deferred and can linger;
+chat settlement alone is not permission to delete. Default `bun test` session
+80854 terminated EXIT=0: 5,525 tests / 506 files / 5,487 pass / 38 skip /
+0 fail / 37,200 assertions / 956.28s, +20 tests / +2 files / +20 pass over
+5,505 / 504 / 5,467 / 38 / 0 with skips unchanged. The runner's 16 and host's
+4 tests are the two new test files; `unwiredMethods` remains 39 without a new
+scan. This is default CLI evidence, not a `--parallel` variant. Standard
+preflight 89848 subsequently terminated EXIT=0 with the same 5,525 / 506
+baseline counts, typecheck 0, `unwiredMethods` 39, boolean/ignored 363/0,
+generated-reference categories 3/8/1/3, and `.githooks` confirmed.
+
+The next production target is a server-owned, bounded evidence-binding
+presentation producer over the existing candidate/validator contract, followed
+by a durable selection/review/bundle receipt. It must not become a permanent
+ambiguous-slot helper, a Fuzu map, or per-item manual gate. Recovery divides
+into three states: before dispatch it may dispatch; after dispatch but before a
+selection is durable it must report outcome-unknown/fail closed (or explicitly
+consume a new retry budget), never publish; after selection is durable it may
+replay review/project/bundle with zero new model call. Two-PDF autonomous
+publication, live quality, and production world binding remain open.
+
+**Visibility correction.** Candidate digest plus the existing trusted-binding
+validator establish source/slot membership only; neither is an automatic
+player-visibility authorization. The planned automatic producer must carry a
+host-only policy and producer provenance, and the host must establish and
+recheck per-field visibility eligibility before projection/facade exposure. The
+existing host-authenticated `operator` is an authorization principal, not a
+human-attestation label; the service wrapper may reuse its route/RBAC, but a
+model or request body cannot self-assert that authority. A heading-only rule is
+not sufficient: a source heading can reveal a hidden corpse or ending
+truth, and existing `scene.name` exposure cannot be used as circular proof of
+safety. This remains an open production dependency; prior offline host and
+source-binding evidence is unchanged.
+
+**Two-PDF release-evidence sizing correction.** Read-only prepare with pinned
+SHA validation of the actual PDFs exited 0. Fuzu's graph has 136 statements and
+four public/Keeper-wording regex hits; three are conditional read-aloud
+passages mixing Keeper and mechanics text. Barn has 250 statements and four
+hits, but they are whole/body duplicates for two subjects and no read-aloud cue
+matched. This is not evidence that Barn has no releasable material, and keyword
+matching is not release authorization.
+
+Existing trusted bindings retain no fragment evidence reference; candidates are
+whole statements and validation only establishes `statement.includes(quote)`.
+Any cue fragment needs a unique raw span and provenance to an existing IR
+release target before it can become a host-only eligibility decision. A first
+fragment implementation may only cover clue/ending fields and is a dependency,
+not autonomous two-PDF publication. NPC introductions and initial-scene safe
+eligibility remain open. Root's `now`/`handoff --no-test` generators exited 0
+(the first sandbox Git-spawn EPERM for now was rerun elevated successfully).
+Standard preflight 89848 then terminated EXIT=0 with the frozen 5,525 / 506
+baseline counts, typecheck 0, `unwiredMethods` 39, boolean/ignored 363/0,
+generated-reference categories 3/8/1/3, and `.githooks` confirmed. It is a
+frozen-batch final gate, not proof of two-PDF autonomous publication, live
+quality, or actual production world binding.
+
+### Authority-contract historical correction (2026-10-10)
+
+The prior blanket wording that `src/compiler/` has no world-runtime import and
+that no source-bound artifact consumer exists is corrected by the current
+layering. The pure authority modules still have no production path that loads
+world evidence into `ClaimCandidate`, constructs `CompilationManifest`, and
+calls `resolveCandidates()`. Separately, the catalog bridge validates and
+persists an exact server-owned artifact-bound world reference, and the compiled
+runtime may consume its scoped dataset only as non-authoritative prompt context
+with provenance. That consumer cannot fill module facts or grant player
+visibility. The coming visibility producer therefore needs its own sealed
+policy/receipt/release guard. Existing host-authenticated `operator` authority
+is a permission principal, not proof that a human made the selection; the
+service wrapper can reuse the existing route/RBAC, while a model or request body
+cannot self-assert it. This is a historical scope correction only, not proof
+that world binding or automatic publication is fully accepted.
+
+### Authorized next live validation and NPC factual boundary (2026-10-10)
+
+The user has authorized, but nobody has executed, one bounded compilation
+validation over the two exact-SHA PDFs: no more than 8 actual external requests
+and 2,400 tokens, a 180-second admission deadline for the first external
+request, no retry, and no publication. This is not live-success evidence. The
+final `now`/`handoff` refresh exited 0; autonomous publication, real quality,
+and actual production world binding remain open.
+
+For Barn NPC facts, Phoebe canonically has only more than half a month without
+news. The last sighting half a month ago in the evening belongs to Mir. The
+earlier model's call, Phoebe-evening, and contact-frequency claims have no
+source support. Current NPC postcheck has no semantic-entailment check, and the
+capture test still accepts an unsupported fake sentence. No prompt-only or
+keyword-list change is treated as a repair; this remains a live-quality issue.
+
+**Live-execution authorization boundary correction.** The bounded live attempt
+was rejected at process creation, so no process started and API requests were
+zero. External-destination disclosure confirmation remains pending; automatic
+goal continuation is not permission, and this does not establish endpoint
+availability. Frozen host evidence: sandbox 20 pass / 6 fail was an absent
+prepare-child environment, while the same command elevated was 26 pass / 2
+files / 148 assertions / EXIT=0 in 6.89s; root typecheck was 0. Owner host
+coverage was 10 / 70 / EXIT=0 in 6.93s. The real CLI unconditional-offline-gate
+mutation was 9 pass / 1 fail / 69 assertions / EXIT=1 and restored to
+10 / 70 / EXIT=0. Fake-source progress does not promise four actual progress
+calls for each module: per-module arithmetic is at most four within global
+eight, and the deadline may leave Barn at zero. Default full session 6185 is
+still live, so neither baseline nor live-quality success is updated here.
+
+**Automatic-presentation policy correction.** A machine `operator` may exercise
+the existing trusted-review selection authority through the existing route when
+the host supplies policy, producer provenance/receipt, and the existing binding
+validator. This does not require a permanent human-by-human gate or unlimited
+natural-language formal semantic proof. `source_exact` still does not grant
+player release: every required presentation field needs its own legal binding;
+a clue/ending-only slice cannot claim two-PDF publication. Opaque remains only
+for module metadata, not a scene/NPC/required-field fallback. Disconnected root
+probe EXIT=0 counted actual no-callers 39, test-only 84, and should-private 26;
+baseline counts are unchanged. Full session 6185 and external-execution
+authorization remain pending.
+
+**Current frozen-batch full-suite record.** Root default `bun test` session
+6185 terminated EXIT=0: 5,531 tests / 506 files / 5,493 pass / 38 skip / 0
+fail / 37,291 assertions / 1011.64s. It is +6 tests / +6 pass over 5,525 /
+506 / 5,487 / 38 / 0, with files and skips unchanged; no per-test or assertion
+delta is attributed. Root typecheck was 0 and the disconnected probe actual
+no-callers count was 39. Standard preflight for this batch is still unrun, so
+this does not become a final gate or a live-quality claim; rejected live
+execution remains API-zero.
+
+**Current frozen-batch standard preflight.** Standard preflight 28197
+terminated EXIT=0: boolean/ignored 365/0, generated-reference categories
+3/8/1/3, typecheck 0, 5,531 tests / 506 files matching baseline,
+`unwiredMethods` 39, and `.githooks` confirmed. It is a frozen-batch final
+gate only: no live process started, API requests are zero, and
+external-destination confirmation remains pending.
+
+**Canonical full-binding selection helper (new frozen slice).** The
+`projection.ts` helper has owner 6 pass / 27 assertions / EXIT=0 and typecheck
+0. Unknown-digest-to-first-binding mutation red was 5 pass / 1 fail / 20
+assertions / EXIT=1 in the cross-field check; restoration was 6 / 27 / EXIT=0.
+Root independent evidence: 3 files / 67 tests / 67 pass / 0 fail / 787
+assertions / EXIT=0 in 71.09s with typecheck 0. The sandbox equivalent was
+63 pass / 4 fail / 765 assertions / EXIT=1 from PDF/local-HTTP prerequisite
+failures; no particular sandbox failure mechanism is asserted, and elevated
+rerun was green. Review has no hard block. Seal-once structure is verified but
+has no runtime-count test. It is not machine-producer, publication, or quality
+completion; it still needs host policy/provenance through review/catalog →
+resolve → session before fresh-PDF actual-play/world-binding acceptance. Root
+full session 99430 terminated EXIT=0: 5,533 tests / 506 files / 5,495 pass / 38
+skip / 0 fail / 37,231 assertions / 1114.42s, +2 tests/+2 pass with files/skips
+unchanged. Assertions are not a baseline and no assertion-delta meaning is
+inferred; root typecheck is 0. Unwired scan 29963 EXIT=0 measured actual
+no-callers 39, test-only 84, and should-private 26. It scans class methods only
+and cannot prove a new exported helper has production consumption. Standard
+preflight 62421 subsequently failed only baseline equality, so this is not a
+final gate.
+
+**Compiled-talk quality source-review boundary.** The compiled-talk mechanism
+uses `executeMechanicsAction` and before/after/action-label narration, not
+`NPCAgent`; therefore `knowledge=[]` alone is not a root cause. Successful
+clues can be in the after frame, but raw question/topic is not. A source NPC
+description is not automatically player/provider-visible. The dynamic
+two-question/same-mechanism counterexample is not executed—only source
+proof/design. This does not reopen found-clue verification or publish all NPC
+private context. Quality remains open; API calls are zero pending authorization,
+and terminal preflight 62421 leaves this batch open rather than old 28197
+covering it.
+
+**Dynamic topic-loss proof (limited).** Read-only in-memory fixture coverage
+used compiled module HTTP bundle → `handleRequest` → two created sessions →
+player intents/actions with fake LLM, native EXIT=0 in 8.40s. The same
+`find_parent` mechanism/actions returned 200 at generation 1 and both distinct
+utterances were absent from narration messages; initial clues were empty and
+after-found visibility gated correctly. Fixture NPC count is zero, so this is
+not NPC talk or private NPC persistence/view proof. Prompt bytes were unequal
+from lifecycle/clock state and are not claimed equal. No source/API changes
+occurred and owned temporary data was cleaned. This proves topic loss only, not
+real model quality; terminal preflight 62421 leaves the new batch open.
+
+**Current-batch preflight and snapshot boundary.** Standard preflight 62421
+terminated EXIT=1 only because 5,496 pass differs from stored baseline 5,495
+(and 5,534 tests from 5,533). Typecheck 0, boolean/ignored 365/0, unwired 39,
+and `.githooks` had no reported error. The real 99430 full is still 5,533 / 506
+/ 5,495 / 38 / 0, but began at 08:37; adapter/test mtimes 08:45/08:46 mean it
+does not attest the later snapshot. Bounded-output/request-identity tests are
+already-authorized `maxPromptChars` work, with insufficient evidence to assign
+a writer, blame, or revert. Root created in-memory execution-input hash
+inventory at 09:27:42; all 841 `src`/`scripts`/`config` inputs remained
+unchanged through 09:47:46. Fresh full session 2008 terminated EXIT=0: 5,534
+tests / 506 files / 5,496 pass / 38 skip / 0 fail / 37,318 assertions /
+1181.94s. Root current adapter/proposals directed run was 49 tests / 2 files /
+49 pass / 0 fail / 479 assertions / 827ms with typecheck 0. New standard
+preflight 89701 terminated EXIT=0: 5,534 tests / 506 files match baseline,
+typecheck 0, boolean/ignored 365/0, unwired 39, and `.githooks` confirmed. Its
+941 execution-input before/after hashes had `changes=[]`; protected index
+(`1fd90...1743`) and architecture (`6ec62...bb`) hashes were unchanged. This is
+regression-gate evidence only; real quality, publication, and world binding
+remain open.
+
+**Topic-preservation plan (not implemented).** Five production files plus
+tests must carry original utterance as ephemeral request-scoped data and bind
+request identity with HMAC, never local storage. Continuing NPC dialogue is an
+independent open implementation/acceptance dependency, not implemented in this
+topic-preservation slice.
+
+**NPC output-surface correction.** Current compiled player presentation emits
+only current scene name/description, found-clue name/revelation, and terminal
+ending name/description. The player facade has presentation/actions/turn and
+no direct NPC-description field; action-state NPC projection filters by scene
+NPC IDs and NPC scene ID, then emits name/HP/status, not description. Do not
+equate a visible NPC name/action label/same-location presence with direct
+NPC-description release. Catalog/provider/Keeper context can still contain description and
+indirect narration still needs verification. This is not a claim that all NPC
+data is safe and does not create an `introduced` hard gate.
+
+### Fresh two-PDF prepare is not publication or model-quality evidence (2026-10-10)
+
+The current read-only `real-model-two-module-acceptance.ts --prepare` result
+used the exact Fuzu SHA-256
+`a774a2478962db7964b10e777a91cb8834a66020be29769493e52b94001235b5` and produced
+artifact `2f6d607156bd3cb1774955d325f681ddacc391f65a2ec7f49ab8dbef10f6045f` with
+197 questions: 195 open, 2 deferred, 0 answered, and `closed=false`. Exact Barn
+SHA-256 `7af2924849cdca9ade940fa28f730a44e9bce6148b1e67280b627b5e5afbb549` produced
+`13c82ca5e6e07e294d75055ca0bb46d96cf4e67d5f17fbc70ba033d5603f9208` with 410
+questions: 384 open, 26 deferred, 0 answered, and `closed=false`. It made
+`externalCalls=0`, recorded two cross-module identity refusals, and observed two
+unique modules/documents.
+
+This is fresh preparation and isolation over two actual business PDFs, not a
+fixture capability and not an actual publication, a trusted bundle/session
+acceptance, a model response sample, or a real-language-quality result. It does
+not change the open autonomous-publication, paired-quality, or production
+world-model goals. Earlier full-suite/preflight records are frozen-batch history
+only and do not cover this tree. The later 72048/77024 full-suite and preflight
+gate covers the current frozen tree, but is regression evidence only: it does
+not turn either prepare result into actual two-PDF publication/play, a model
+sample, real-language-quality evidence, or production world-model binding.
+Index refresh remains deferred because `docs/notes/index.json` is concurrently
+protected.
+
+### Parsed source identity and bounded acceptance correction (2026-10-10)
+
+Source checks must compare the parser's actual statement identity and quote,
+not a PDF extractor's original layout string. A normalization mismatch can make
+an exact-text premise false while the accepted interpretation still has a valid
+parsed statement ID; it is therefore not evidence that the source chain was
+lost. Ending-source investigation must use the accepted ending
+interpretation's exact `sourceStatementIds`. In the queue an explicit ending
+heading selects its heading scope, otherwise the whole graph is used; a normal
+review hint preserves the question source set and must not be widened by an
+unsupported fallback. Neither a zero candidate count nor an absent terminal
+opaque value proves that a source is missing. Page-count differences need the
+same artifact and field-path comparison: the latest heading-only artifact had
+one ordinary and one machine candidate, so no clearance-filter conclusion is
+recorded.
+
+Fixture and acceptance evidence remain bounded. A terminal fixture needs real
+Ending source text, all exit branches, and the generated multi-declaration
+queue; a fabricated same-scene Talk route or a stale-token/scene conflict does
+not substitute for its terminal gate. One source-scoped prompt with no dialogue
+history cannot validate a continuing NPC conversation. The still-required
+quality path is two fresh PDFs through machine publication, API player
+intents/actions/narration, two referential follow-ups, and observable world
+binding. No model call occurred in this record, so no endpoint condition,
+source-missing diagnosis, full-host closure, or model-quality result is
+claimed. `docs/notes/index.json` remains intentionally unrefreshed.
+
+**Module/slot correction.** Fuzu measured `ordinary=1, machine=1` for its
+ending slot, while Barn `benchmark_exit` measured `0`. These scoped readings do
+not prove either a global lack of source material or a global clearance/guard
+filtering cause.

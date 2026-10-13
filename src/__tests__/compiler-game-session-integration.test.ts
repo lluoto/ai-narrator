@@ -10,12 +10,24 @@ import {
 import { projectResolvedCompilerArtifact, type CompilerModuleDataProjection, type ModuleDataPresentationMetadata } from "../compiler/compiler-module-data-projection";
 import { prepareCompiler, resolveCompiler, type PreparedCompilerApiResult } from "../compiler/compiler-api";
 import type { ResolvedCompilerArtifactPayload } from "../compiler/compiler-artifact";
-import { type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
+import { MODULE_COMPILE_HINTS_SCHEMA_VERSION, type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
 import { compiledMechanicsAction, GameSession } from "../api/game-session";
+import { ordinaryGameSessionSnapshotHash, type OrdinarySnapshotJson } from "../api/ordinary-game-session-snapshot";
 import { runGameSessionScript } from "../diagnostics/game-session-run-harness";
+import { patchGameSessionWorldMethod } from "./helpers/game-session-world-fault";
 
 const PAGES = ["入口：\n▶父线索：一把档案室钥匙。\n档案室：\n▶子线索：一份必须读懂的档案。\n出口：\n▶出口说明：离开这里的旧车票。"];
 const CONFIG = { apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 512, temperature: 0.7 };
+
+function withFixedNow<T>(now: number, operation: () => T): T {
+  const original = Date.now;
+  Date.now = () => now;
+  try {
+    return operation();
+  } finally {
+    Date.now = original;
+  }
+}
 
 function answer(question: CompilerQuestion, value: unknown): CompilerQuestionResolution {
   return {
@@ -43,11 +55,14 @@ function hints(prepared: PreparedCompilerApiResult): ModuleCompileHints {
   const entryQuestion = queue.questions.find((question) => question.kind === "entry_scene")!;
   const endingQuestion = queue.questions.find((question) => question.kind === "ending_rule")!;
   return {
-    schemaVersion: "1.1.0",
+    schemaVersion: MODULE_COMPILE_HINTS_SCHEMA_VERSION,
     moduleId: queue.moduleId,
     documentHash: queue.documentHash,
     sourceGraphIdentity: queue.sourceGraphIdentity,
     resolutions: [
+      ...queue.questions.filter((question) => question.kind === "clue_fact_facets").map((question) => answer(question, {
+        shell: (question.allowedClueFactAtoms ?? []).map((atom) => ({ atomId: atom.id, quote: atom.quote })), findings: [], sourceOnlyAtomIds: [],
+      })),
       ...queue.questions.filter((question) => question.kind === "scene_role").map((question) => answer(question, { role: "playable_scene" })),
       answer(entryQuestion, { sceneCandidateId: entry.id }),
       answer(topology(entry.id), { connections: [{ toSceneCandidateId: archive.id, connectionId: "entry_archive", availability: { kind: "connection_unlocked", connectionId: "entry_archive" } }] }),
@@ -93,11 +108,16 @@ async function fixture(): Promise<{ payload: ResolvedCompilerArtifactPayload; pr
   const resolved = resolveCompiler(prepared.artifact, prepared.identity.preparedQueueHash, hints(prepared));
   if (resolved.status === "refused") throw new Error(resolved.message);
   const payload = resolved.artifact.payload as ResolvedCompilerArtifactPayload;
+  const facetRevelations = new Map<string, string>();
+  for (const binding of payload.clueFactFacetBindings) {
+    if (binding.shellAtoms.length || binding.findings.length) facetRevelations.set(binding.clueId, binding.shellAtoms.map((atom) => atom.quote).join("\n") || payload.draft.clueCandidates.find((candidate) => candidate.id === binding.clueId)!.displayName);
+    for (const finding of binding.findings) facetRevelations.set(finding.clueId, finding.atoms.map((atom) => atom.quote).join("\n"));
+  }
   const metadata: ModuleDataPresentationMetadata = {
     module: { title: "Compiled session", version: "1", ruleset: "cosmic-horror", era: "test", summary: "validated presentation", playerCount: "1", expectedDuration: "short", triggerWarnings: [] },
     scenes: Object.fromEntries(payload.mechanicsIR.symbols.sceneIds.map((id) => [id, { description: `scene:${id}` }])),
     connections: Object.fromEntries(payload.analysisInput.connections.map((connection) => [connection.id, { condition: `connection:${connection.id}` }])),
-    clues: Object.fromEntries(payload.mechanicsIR.symbols.clueIds.map((id) => [id, { findMethods: [], revelation: `revelation:${id}`, unlocks: [], importance: "core" }])),
+    clues: Object.fromEntries(payload.mechanicsIR.symbols.clueIds.map((id) => [id, { findMethods: [], revelation: facetRevelations.get(id) ?? `revelation:${id}`, unlocks: [], importance: "core" }])),
     endings: {
       compiled_clean_escape: { name: "Clean escape", description: "Validated ending narration.", conditions: ["all core clues found"] },
       compiled_hasty_exit: { name: "Hasty exit", description: "Hasty validated ending narration.", conditions: ["left without core clue"] },
@@ -110,6 +130,22 @@ async function fixture(): Promise<{ payload: ResolvedCompilerArtifactPayload; pr
 
 function session(id: string): GameSession {
   return new GameSession(id, "cosmic-horror", CONFIG, "investigator", "调查员");
+}
+
+/** Compiled checks read the persisted p1 sheet, so seed it before loading through the ordinary portable boundary. */
+function sessionWithSkills(id: string, skillValues: Record<string, number>): GameSession {
+  const source = session(id);
+  const snapshot = source.exportOrdinarySessionSnapshot();
+  const p1 = snapshot.state.characters.find((entry) => entry.pcId === "p1");
+  if (!p1 || p1.sheet === null || Array.isArray(p1.sheet) || typeof p1.sheet !== "object") throw new Error("fixture requires p1 sheet");
+  const sheet = p1.sheet as Record<string, OrdinarySnapshotJson>;
+  if (sheet.skillValues === null || Array.isArray(sheet.skillValues) || typeof sheet.skillValues !== "object") throw new Error("fixture requires p1 skillValues");
+  Object.assign(sheet.skillValues as Record<string, OrdinarySnapshotJson>, skillValues);
+  const { snapshotHash: _discarded, ...unsigned } = snapshot;
+  const replacement = new GameSession(id, "cosmic-horror", CONFIG);
+  replacement.restoreOrdinarySessionSnapshot({ ...unsigned, snapshotHash: ordinaryGameSessionSnapshotHash(unsigned) });
+  source.close();
+  return replacement;
 }
 
 function ids(payload: ResolvedCompilerArtifactPayload) {
@@ -150,9 +186,36 @@ describe("compiled GameSession integration", () => {
     expect(target.getCompiledMechanicsState()?.state.currentSceneId).toBe(payload.analysisInput.entrySceneId);
   });
 
+  it("rolls back a failed direct projection install before allowing the same target to retry", async () => {
+    const { payload, projection } = await fixture();
+    const target = session("compiled-direct-install-atomicity");
+    const ordinaryBefore = target.exportOrdinarySessionSnapshot();
+    const before = {
+      state: target.getState(),
+      scenes: target.world.listScenes(),
+      displayNames: ordinaryBefore.state.sceneDisplayNames,
+      aliases: ordinaryBefore.state.sceneAliases,
+      sceneItems: ordinaryBefore.state.sceneItems,
+    };
+    const restoreSetActiveScene = patchGameSessionWorldMethod(target, "setActiveScene", () => false);
+    try {
+      expect(target.loadCompiledModule(payload, projection).status).toBe("refused");
+      expect(target.getCompiledMechanicsState()).toBeNull();
+      expect(target.getCompiledGeneration()).toBeNull();
+      expect(target.getState()).toEqual(before.state);
+      expect(target.world.listScenes()).toEqual(before.scenes);
+      expect(target.exportOrdinarySessionSnapshot().state.sceneDisplayNames).toEqual(before.displayNames);
+      expect(target.exportOrdinarySessionSnapshot().state.sceneAliases).toEqual(before.aliases);
+      expect(target.exportOrdinarySessionSnapshot().state.sceneItems).toEqual(before.sceneItems);
+    } finally {
+      restoreSetActiveScene();
+    }
+    expect(target.loadCompiledModule(payload, projection).status).toBe("loaded");
+  });
+
   it("uses exact gated topology and a real hard GameSession check instead of a preselected success", async () => {
     const { payload, projection } = await fixture();
-    const target = session("compiled-gate-check");
+    const target = sessionWithSkills("compiled-gate-check", { library_use: 80 });
     expect(target.loadCompiledModule(payload, projection).status).toBe("loaded");
     const action = ids(payload);
 
@@ -163,22 +226,28 @@ describe("compiled GameSession integration", () => {
     expect(target.investigation.isDiscoveredBy(parentClueId, target.activePlayerId)).toBe(true);
     expect((await target.act(compiledMechanicsAction(action.entryGate))).error).toBeUndefined();
     expect(target.getState().scene).toBe(payload.analysisInput.connections.find((connection) => connection.id === "entry_archive")!.toSceneId);
-    (target as any).activeCharacter.skillValues.library_use = 80;
     const checked = await withRandom(0.4, () => target.act(compiledMechanicsAction(action.child)));
 
-    expect(checked.dice?.[0]).toMatchObject({ total: 41, detail: "library_use/hard" });
+    const dice = checked.dice;
+    const roll = dice?.[0];
+    if (!dice || !roll) throw new Error("checked compiled action must report a dice roll");
+    const wire = JSON.stringify(checked);
+    expect(roll).toMatchObject({ total: 41, detail: "library_use/hard" });
+    expect(Object.isFrozen(dice)).toBe(true);
+    expect(Object.isFrozen(roll)).toBe(true);
+    expect(Reflect.set(dice, 0, { expr: "d100", total: 1 })).toBe(false);
+    expect(Reflect.set(roll, "total", 1)).toBe(false);
+    expect(JSON.stringify(checked)).toBe(wire);
     expect(checked.compiled?.trace.at(-1)).toMatchObject({ mechanismId: action.child, outcome: "failure" });
     expect(checked.compiled?.state.foundClueIds).not.toContain(payload.mechanicsIR.discoveryMethods.find((method) => method.id === action.child)!.clueId);
   });
 
   it("executes N failures then declared failback, settles ending in the same act, and refuses terminal actions", async () => {
     const { payload, projection } = await fixture();
-    const target = session("compiled-failback-terminal");
+    const target = sessionWithSkills("compiled-failback-terminal", { library_use: 1 });
     expect(target.loadCompiledModule(payload, projection).status).toBe("loaded");
     const action = ids(payload);
     await unlockAndEnter(target, payload);
-    (target as any).activeCharacter.skillValues.library_use = 1;
-
     await withRandom(0.5, () => target.act(compiledMechanicsAction(action.child)));
     await withRandom(0.5, () => target.act(compiledMechanicsAction(action.child)));
     const failback = await target.act(compiledMechanicsAction(action.child));
@@ -199,12 +268,10 @@ describe("compiled GameSession integration", () => {
   it("has per-session MechanicsState and matches direct shared-core replay through the deterministic GameSession harness", async () => {
     const { payload, projection } = await fixture();
     const action = ids(payload);
-    const target = session("compiled-replay-a");
+    const target = sessionWithSkills("compiled-replay-a", { library_use: 100 });
     const other = session("compiled-replay-b");
     expect(target.loadCompiledModule(payload, projection).status).toBe("loaded");
     expect(other.loadCompiledModule(payload, projection).status).toBe("loaded");
-    (target as any).activeCharacter.skillValues.library_use = 100;
-
     const run = await runGameSessionScript(target, [
       { input: compiledMechanicsAction(action.parent) },
       { input: compiledMechanicsAction(action.entryGate) },
@@ -243,13 +310,9 @@ describe("compiled GameSession integration", () => {
       ["analysis", { ...structuredClone(payload), analysisInput: { ...payload.analysisInput, maxStates: 0 } }, projection],
     ] as const) {
       const target = session(`compiled-zero-write-${label}`);
-      let writes = 0;
-      for (const method of ["registerScene", "setSceneExits", "setActiveScene", "upsertEntity", "recordSceneVisit", "recordClueDiscovery"] as const) {
-        const original = (target.world as any)[method].bind(target.world);
-        (target.world as any)[method] = (...args: unknown[]) => { writes++; return original(...args); };
-      }
+      const worldBefore = target.world.exportSnapshot();
       expect(target.loadCompiledModule(alteredPayload as ResolvedCompilerArtifactPayload, alteredProjection as CompilerModuleDataProjection).status).toBe("refused");
-      expect(writes).toBe(0);
+      expect(target.world.exportSnapshot()).toEqual(worldBefore);
     }
   });
 
@@ -273,9 +336,8 @@ describe("compiled GameSession integration", () => {
 
   it("refreshes activity only after an accepted compiled action", async () => {
     const { payload, projection } = await fixture();
-    const target = session(`compiled-activity-${crypto.randomUUID()}`);
+    const target = withFixedNow(1, () => session(`compiled-activity-${crypto.randomUUID()}`));
     expect(target.loadCompiledModule(payload, projection).status).toBe("loaded");
-    target.lastActiveAt = 1;
     expect((await target.act(compiledMechanicsAction("not-available"))).error?.code).toBe("compiled_action_unavailable");
     expect(target.lastActiveAt).toBe(1);
     expect((await target.act(compiledMechanicsAction(ids(payload).parent))).error).toBeUndefined();
@@ -284,7 +346,8 @@ describe("compiled GameSession integration", () => {
 
   it("keeps the shared-core call as a static mutation sentinel", () => {
     const source = readFileSync("src/api/game-session.ts", "utf8");
-    const requiresSharedCore = (value: string) => value.includes("executeMechanicsAction(compiled.payload.mechanicsIR") && value.includes("settleAutomaticMechanics(compiled.payload.mechanicsIR");
+    const requiresSharedCore = (value: string) => /executeMechanicsAction\(\s*compiled\.payload\.mechanicsIR/.test(value)
+      && /settleAutomaticMechanics\(\s*compiled\.payload\.mechanicsIR/.test(value);
     expect(requiresSharedCore(source)).toBe(true);
     expect(requiresSharedCore(source.replaceAll("executeMechanicsAction", "bypassedMechanicsAction"))).toBe(false);
   });

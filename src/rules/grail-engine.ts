@@ -25,6 +25,10 @@ export interface RankSource {
   attributes?: Record<string, unknown>;
 }
 
+function isGrailRank(rank: unknown): rank is GrailRank {
+  return rank === "bronze" || rank === "iron" || rank === "silver" || rank === "gold" || rank === "legendary";
+}
+
 /**
  * 从实体名 / status / attributes.rank 推断位阶。
  *
@@ -32,7 +36,7 @@ export interface RankSource {
  * 用 `(entity as any).attributes` 取值且写成 `if (attrs?.rank) return attrs.rank`
  * —— 没有类型判断，attributes 里放一个数值 rank 就会被原样返回，而调用方拿它
  * 去索引位阶配置表。WorldEntity.attributes 声明的正是 Record<string, number>，
- * 所以那条路可达。这里的 typeof 判断是唯一正确的写法，不该有第二份。
+ * 所以那条路可达。这里的 isGrailRank 闭合判断是唯一正确的写法，不该有第二份。
  *
  * 入参只写它真正读的三个字段，不写 WorldEntity：圣杯规则下攻击方从规则路由器
  * 传进来的是玩家属性表（name/id/proficiency/abilities），根本没有 status，
@@ -41,7 +45,7 @@ export interface RankSource {
  */
 export function inferGrailRank(entity: RankSource): GrailRank {
   const rank = entity.attributes?.rank;
-  if (typeof rank === "string") return rank as GrailRank;
+  if (isGrailRank(rank)) return rank;
 
   const text = [entity.name, ...(entity.status ?? [])].join(" ");
   if (/传奇/.test(text)) return "legendary";

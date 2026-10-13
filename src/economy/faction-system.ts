@@ -2,6 +2,7 @@ import {
   Faction, Treaty, Stance, TreatyType,
   DiplomaticOffer, EconomyEvent, FactionType
 } from "./types";
+import type { FactionSystemSnapshot } from "./politico-economy-snapshot";
 
 // ── 内部扩展：带ID和条约期限的外交提议 ──
 interface TrackedOffer extends DiplomaticOffer {
@@ -77,6 +78,26 @@ export class FactionSystem {
 
   getAllFactions(): Faction[] {
     return Array.from(this.factions.values());
+  }
+
+  /** Internal persistence primitive. Untrusted snapshots are validated by the engine. */
+  exportForSnapshot(): { factions: Faction[]; state: FactionSystemSnapshot } {
+    return {
+      factions: Array.from(this.factions.values()),
+      state: {
+        diplomaticOffers: this.diplomaticOffers,
+        events: this.events,
+        round: this.round,
+      },
+    };
+  }
+
+  /** Internal persistence primitive. Call only with validatePoliticoEconomySnapshot output. */
+  replaceFromSnapshot(factions: Faction[], state: FactionSystemSnapshot): void {
+    this.factions = new Map(factions.map(faction => [faction.id, faction]));
+    this.diplomaticOffers = state.diplomaticOffers;
+    this.events = state.events;
+    this.round = state.round;
   }
 
   // ═══════════════════════════════════════

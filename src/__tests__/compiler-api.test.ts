@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { serializeCompilerArtifact, type ResolvedCompilerArtifactPayload } from "../compiler/compiler-artifact";
 import { prepareCompiler, resolveCompiler, type PreparedCompilerApiResult } from "../compiler/compiler-api";
-import { type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
+import { MODULE_COMPILE_HINTS_SCHEMA_VERSION, type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
+import { minimalPdfBytes } from "./helpers/minimal-pdf";
 
 const PAGES = ["入口：\n普通叙述不能凭空绑定线索。\n▶父线索：一把刻有档案室标记的钥匙。\n档案室：\n▶子线索：一份需要检定才能读懂的档案。\n出口：\n▶出口说明：离开这里的旧车票。"];
 
@@ -24,8 +25,11 @@ function hints(prepared: PreparedCompilerApiResult): ModuleCompileHints {
   const entryQuestion = queue.questions.find((question) => question.kind === "entry_scene")!;
   const endingQuestion = queue.questions.find((question) => question.kind === "ending_rule")!;
   return {
-    schemaVersion: "1.1.0", moduleId: queue.moduleId, documentHash: queue.documentHash, sourceGraphIdentity: queue.sourceGraphIdentity,
+    schemaVersion: MODULE_COMPILE_HINTS_SCHEMA_VERSION, moduleId: queue.moduleId, documentHash: queue.documentHash, sourceGraphIdentity: queue.sourceGraphIdentity,
     resolutions: [
+      ...queue.questions.filter((question) => question.kind === "clue_fact_facets").map((question) => resolution(question, {
+        shell: (question.allowedClueFactAtoms ?? []).map((atom) => ({ atomId: atom.id, quote: atom.quote })), findings: [], sourceOnlyAtomIds: [],
+      })),
       ...queue.questions.filter((question) => question.kind === "scene_role").map((question) => resolution(question, { role: "playable_scene" })),
       resolution(entryQuestion, { sceneCandidateId: entry.id }),
       resolution(topology(entry.id), { connections: [{ toSceneCandidateId: archive.id, connectionId: "connection_entry_archive" }, { toSceneCandidateId: exit.id, connectionId: "connection_entry_exit" }] }),
@@ -41,28 +45,6 @@ function hints(prepared: PreparedCompilerApiResult): ModuleCompileHints {
       ] }),
     ],
   };
-}
-
-function pdfBytes(text: string): Uint8Array {
-  const stream = `BT\n/F1 18 Tf\n72 720 Td\n(${text.replace(/([\\()])/g, "\\$1")}) Tj\nET\n`;
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-    `<< /Length ${new TextEncoder().encode(stream).length} >>\nstream\n${stream}endstream`,
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-  ];
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  for (const [index, object] of objects.entries()) {
-    offsets.push(new TextEncoder().encode(pdf).length);
-    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-  }
-  const xref = new TextEncoder().encode(pdf).length;
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const offset of offsets.slice(1)) pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return new TextEncoder().encode(pdf);
 }
 
 async function prepared(): Promise<PreparedCompilerApiResult> {
@@ -110,11 +92,16 @@ describe("public compiler API", () => {
   });
 
   it("parses deterministic actual PDF bytes and retains a byte-based non-null identity", async () => {
-    const result = await prepareCompiler({ kind: "pdf_bytes", moduleId: "compiler-api-pdf", pdfBytes: pdfBytes("Entry:") });
+    const result = await prepareCompiler({ kind: "pdf_bytes", moduleId: "compiler-api-pdf", pdfBytes: minimalPdfBytes("Entry:") });
     if (result.status === "refused") throw new Error(result.message);
     expect(result.identity.documentHash).toMatch(/^[a-f0-9]{64}$/);
     expect(result.artifact.payload.graph.documentIdentity.hashSource).toBe("pdf_bytes_sha256");
     expect(result.artifact.payload.graph.documentIdentity.pages[0]!.rawText).toContain("Entry:");
+  });
+
+  it("refuses a valid PDF whose text layer has no usable normalized text", async () => {
+    const result = await prepareCompiler({ kind: "pdf_bytes", moduleId: "compiler-api-textless-pdf", pdfBytes: minimalPdfBytes("") });
+    expect(result).toMatchObject({ status: "refused", stage: "prepare", code: "PDF_TEXT_UNAVAILABLE" });
   });
 
   it("refuses empty and malformed PDF bytes without treating them as synthetic input", async () => {

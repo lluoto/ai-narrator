@@ -2,25 +2,60 @@
 // 模组编辑器 — CRUD 模组 JSON 文件
 // ============================================================
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
-import { join } from "path";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { isAbsolute, relative, resolve, sep } from "path";
 import type { MythosModule } from "../rules/mythos-module";
 
-const MODULES_DIR = join(process.cwd(), "data", "modules");
+const MODULES_DIR = resolve(process.cwd(), "data", "modules");
+const MODULE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+/** Module IDs double as storage filenames, so they are deliberately one ASCII path segment. */
+export function isSafeModuleId(value: unknown): value is string {
+  return typeof value === "string" && MODULE_ID_PATTERN.test(value);
+}
+
+/** Validate both the declared identifier and the resolved storage containment. */
+function moduleFilePath(id: string): string | null {
+  if (!isSafeModuleId(id)) return null;
+  const candidate = resolve(MODULES_DIR, `${id}.json`);
+  const fromModules = relative(MODULES_DIR, candidate);
+  if (!fromModules || fromModules === ".." || fromModules.startsWith(`..${sep}`) || isAbsolute(fromModules)) return null;
+  return candidate;
+}
+
+function lstatOrAbsent(path: string) {
+  try { return lstatSync(path); }
+  catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
 
 function ensureDir() {
-  if (!existsSync(MODULES_DIR)) mkdirSync(MODULES_DIR, { recursive: true });
+  const existing = lstatOrAbsent(MODULES_DIR);
+  if (!existing) mkdirSync(MODULES_DIR, { recursive: true });
+  const stat = lstatOrAbsent(MODULES_DIR);
+  if (!stat) throw new Error("module storage is unavailable");
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("module storage is unavailable");
+}
+
+function regularModuleFile(path: string): boolean {
+  const stat = lstatOrAbsent(path);
+  return stat !== null && stat.isFile() && !stat.isSymbolicLink();
 }
 
 /** 列出所有已保存的模组 */
 export function listSavedModules(): { id: string; name: string; description: string; difficulty: string }[] {
   ensureDir();
   return readdirSync(MODULES_DIR)
-    .filter(f => f.endsWith(".json"))
-    .map(f => {
+    .filter((file) => file.endsWith(".json"))
+    .map((file) => ({ id: file.slice(0, -".json".length), path: moduleFilePath(file.slice(0, -".json".length)) }))
+    .filter((entry): entry is { id: string; path: string } => entry.path !== null && regularModuleFile(entry.path))
+    .map(({ id, path }) => {
       try {
-        const mod = JSON.parse(readFileSync(join(MODULES_DIR, f), "utf-8")) as MythosModule;
-        return { id: mod.id, name: mod.name, description: mod.description, difficulty: mod.difficulty };
+        const parsed = parseMythosModule(JSON.parse(readFileSync(path, "utf-8")));
+        if (!parsed.ok || parsed.module.id !== id) return null;
+        return { id: parsed.module.id, name: parsed.module.name, description: parsed.module.description, difficulty: parsed.module.difficulty };
       } catch { return null; }
     })
     .filter(Boolean) as { id: string; name: string; description: string; difficulty: string }[];
@@ -28,10 +63,16 @@ export function listSavedModules(): { id: string; name: string; description: str
 
 /** 按 ID 加载模组 */
 export function loadModuleFile(id: string): MythosModule | null {
+  const fp = moduleFilePath(id);
+  if (!fp) return null;
   ensureDir();
-  const fp = join(MODULES_DIR, `${id}.json`);
-  if (!existsSync(fp)) return null;
-  return JSON.parse(readFileSync(fp, "utf-8"));
+  if (!regularModuleFile(fp)) return null;
+  try {
+    const parsed = parseMythosModule(JSON.parse(readFileSync(fp, "utf-8")));
+    return parsed.ok && parsed.module.id === id ? parsed.module : null;
+  } catch {
+    return null;
+  }
 }
 
 // ============================================================
@@ -72,6 +113,7 @@ export function parseMythosModule(input: unknown): ModuleParseResult {
       return { ok: false, error: `字段 ${key} 必须是非空字符串` };
     }
   }
+  if (!isSafeModuleId(input.id)) return { ok: false, error: "module id is invalid" };
   if (typeof input.description !== "string") {
     return { ok: false, error: "字段 description 必须是字符串" };
   }
@@ -111,12 +153,17 @@ export function parseMythosModule(input: unknown): ModuleParseResult {
 
 /** 保存模组（新建或更新） */
 export function saveModuleFile(module: MythosModule): void {
+  const fp = moduleFilePath(module.id);
+  if (!fp) throw new Error("module id is invalid");
   ensureDir();
-  writeFileSync(join(MODULES_DIR, `${module.id}.json`), JSON.stringify(module, null, 2), "utf-8");
+  const existing = lstatOrAbsent(fp);
+  if (existing && (!existing.isFile() || existing.isSymbolicLink())) throw new Error("module storage target is unavailable");
+  writeFileSync(fp, JSON.stringify(module, null, 2), "utf-8");
 }
 
 /** 删除模组 */
 export function deleteModuleFile(id: string): void {
-  const fp = join(MODULES_DIR, `${id}.json`);
-  if (existsSync(fp)) unlinkSync(fp);
+  const fp = moduleFilePath(id);
+  if (!fp) throw new Error("module id is invalid");
+  if (regularModuleFile(fp)) unlinkSync(fp);
 }

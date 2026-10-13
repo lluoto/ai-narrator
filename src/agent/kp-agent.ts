@@ -8,7 +8,7 @@
 
 import type { LLMLike, Message as LLMMessage } from "../llm/client";
 import type { KPDirective, TurnRecord, AgentMessage } from "./types";
-import { fallbackNarrative, fallbackSceneDescription, DEGRADATION_NOTICE } from "../llm/fallback";
+import { fallbackSceneDescription } from "../llm/fallback";
 import { checkNarrationText } from "../world/world-constraint";
 import type { RulesetId } from "../rules/rules-engine";
 import { log } from "../log";
@@ -24,6 +24,12 @@ export interface NarrateConstraintOpts {
   /** 当前场景（当前 PC 视角）尚未发现的线索名字/唯一简称，见 world-constraint.ts */
   undiscoveredClueKeys?: string[];
 }
+
+/** The scene provider outcome is explicit so HTTP creation never infers health from fallback prose. */
+export type SceneDescriptionResult = Readonly<
+  | { status: "ready"; description: string }
+  | { status: "fallback"; description: string }
+>;
 
 /** 约束拦截且重生成仍未通过时的安全兜底——不点名任何具体对象，只描述"事情发生了"。 */
 const SAFE_NARRATION_FALLBACK = [
@@ -49,6 +55,20 @@ const KP_SYSTEM_PROMPT = `你是一个 TRPG 主持人（KP/DM）。你的任务�
 
 格式：每次输出一个场景描述块。如果需要玩家行动，以"你要怎么做？"结尾。`;
 
+/**
+ * This is an operational notice, not diegetic prose.  Keep it separate from
+ * the older generic degradation marker: a provider outage must never invent a
+ * room, sound, attack, clue, or completed player action.
+ */
+export const KP_NARRATION_UNAVAILABLE_NOTICE = "叙事服务暂时不可用。";
+
+function factualNarrationFallback(outcome: string): string {
+  const publicOutcome = outcome.trim();
+  return publicOutcome
+    ? `${KP_NARRATION_UNAVAILABLE_NOTICE}\n\n${publicOutcome}`
+    : KP_NARRATION_UNAVAILABLE_NOTICE;
+}
+
 export class KPAgent {
   private llm: LLMLike;
   private directive: KPDirective;
@@ -71,8 +91,8 @@ export class KPAgent {
     this.worldModelContext = text;
   }
 
-  /** 推进当前场景 */
-  async describeScene(): Promise<string> {
+  /** Produce a scene while preserving whether provider narration was available. */
+  async describeSceneResult(signal?: AbortSignal): Promise<SceneDescriptionResult> {
     const messages: LLMMessage[] = [
       { role: "system", content: KP_SYSTEM_PROMPT },
       {
@@ -80,6 +100,7 @@ export class KPAgent {
         content: [
           `当前场景: ${this.directive.scene_description}`,
           `场景元素: ${this.directive.scene_elements.join("、")}`,
+          "事实边界: 当前场景与场景元素列出了本次可用于叙事的全部玩家可见事实；不得补写未提供的物件、气味、声音、天气、照明、日期/时间、NPC 知识或已发生事件，未提供时保持中性。",
           `剧情阶段: ${this.directive.current_phase}`,
           `叙事风格: ${this.directive.style}`,
         ].join("\n"),
@@ -119,12 +140,25 @@ export class KPAgent {
         temperature: this.worldModelContext.includes("[叙事输出最终约束]") ? 0.2 : 0.7,
         maxTokens: 600,
         timeout: 120000,
+        maxAttempts: 1,
+        signal,
       });
-      return response.trim();
-    } catch (err: any) {
-      log.warn("kp", `KP 场景描述 LLM 失败: ${err.message.slice(0, 60)}`);
-      return fallbackSceneDescription(this.directive.scene_description);
+      return { status: "ready", description: response.trim() };
+    } catch (error) {
+      // A caller cancellation is not a degraded narration result.  In
+      // particular, server-side creation must be able to tear down its
+      // non-authoritative staging target instead of publishing a fallback.
+      if (signal?.aborted) throw error;
+      // Provider diagnostics can include response bodies, endpoint URLs, or
+      // request IDs. The fallback is observable without retaining any of it.
+      log.warn("kp", "KP scene description provider unavailable; using fallback");
+      return { status: "fallback", description: fallbackSceneDescription(this.directive.scene_description) };
     }
+  }
+
+  /** Backward-compatible string API for CLI and direct callers. */
+  async describeScene(signal?: AbortSignal): Promise<string> {
+    return (await this.describeSceneResult(signal)).description;
   }
 
   /**
@@ -153,6 +187,8 @@ export class KPAgent {
         role: "system",
         content: [
           `场景: ${this.directive.scene_description}`,
+          `场景元素: ${this.directive.scene_elements.join("、")}`,
+          "事实边界: 当前场景与场景元素列出了本次可用于叙事的全部玩家可见事实；不得补写未提供的物件、气味、声音、天气、照明、日期/时间、NPC 知识或已发生事件，未提供时保持中性。",
           `剧情阶段: ${this.directive.current_phase}`,
         ].join("\n"),
       },
@@ -187,7 +223,7 @@ export class KPAgent {
     const temperature = this.worldModelContext.includes("[叙事输出最终约束]") ? 0.2 : 0.8;
     const callOnce = async (extra?: LLMMessage): Promise<string> => {
       const raw = await this.llm.chat(extra ? [...messages, extra] : messages, {
-        temperature, maxTokens: 500, timeout: 120000,
+        temperature, maxTokens: 500, timeout: 120000, maxAttempts: 1,
       });
       return raw.trim();
     };
@@ -218,7 +254,10 @@ export class KPAgent {
       return response;
     } catch (err: any) {
       log.warn("kp", `KP 叙事 LLM 失败: ${err.message}`);
-      return DEGRADATION_NOTICE + "\n\n" + fallbackNarrative(playerAction + " " + outcome);
+      // `outcome` is the caller's already-public rule/result text.  Do not
+      // pass playerAction through fallbackNarrative: its generic scene/action
+      // templates fabricate facts and can falsely narrate an uncommitted act.
+      return factualNarrationFallback(outcome);
     }
   }
 

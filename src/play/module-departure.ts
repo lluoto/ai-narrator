@@ -52,34 +52,6 @@ export function isConfirmReply(rawInput: string): boolean {
  */
 export const MODULE_ENDING_SUPPORT: Record<string, ModuleSupport> = {
   premiers_barn: BARN_SUPPORT,
-  // 开发·摄取管线校准 阶段4，"顺带"项：摄取产物的模组 id 是
-  // "barn-of-premier-ingested"（scripts/ingest/run.ts），此前不在这张表
-  // 里——玩家（如果能加载到它）显式离开时只会拿到 GENERIC_DEPARTURE_LINES
-  // 那两句通用收场，而不是任何具体结局。
-  //
-  // 复用 BARN_SUPPORT 而不是给它单独写一份：摄取产物与 premiers_barn/
-  // BARN_OF_PREMIER 讲的是**同一个故事**（同一份 PDF 的两种抽取方式），
-  // evaluateEndNarration 已经是这个故事唯一一份真正核对过原文的求值逻辑。
-  // 这不是编——BARN_SUPPORT 本身不是为摄取产物量身定制的假数据，是这个
-  // 故事已经存在、已经验证过的结局叙事。
-  //
-  // ⚠ 诚实的限制：摄取产物用的是自己的内部 id 空间（scene_04 这类），
-  // 不会产生 clue_bedroom_diary 这类 BARN_OF_PREMIER 专属线索 id，所以
-  // evaluateEndNarration 的具体条件（requiredClues/excludeClues/
-  // requiredScenes）实际上永远不会命中——落到的会一直是 priority 最低、
-  // 无条件命中的 Normal End（barn-of-premier.ts 自己的设计：
-  // "没有更具体的结局匹配时给这个，游戏必须总能给出结局"）。这仍然比
-  // GENERIC_DEPARTURE_LINES 的两句占位文案更接近这个故事的真实收场。
-  //
-  // ⚠ 更诚实的限制：GameSession.handleLoadModule 目前根本没有加载
-  // ModuleData 形状模组（摄取产物）的通路——它只认 MythosModule
-  // （premiers_barn/arkham_library/innsmouth_shadow 三个硬编码名字）。
-  // 这条登记因此暂时"够不着"：不是这张表错了，是喂给它的模组 id 还没有
-  // 任何办法真正出现在 this.registeredModules 里。让两套模组表示接上是
-  // todo-19 的范围，不在本轮——这里只保证"表已经等在这儿了"，登记表本身
-  // 与它的 evaluateEnding 行为有独立的单元测试覆盖
-  // （ingest-e2e-module.test.ts），不依赖那条尚不存在的加载通路。
-  "barn-of-premier-ingested": BARN_SUPPORT,
 };
 
 /** 没有结局数据的模组，早退时的通用收场文案。 */

@@ -72,7 +72,7 @@ describe("Barn unification resurrection sentinels", () => {
     const session = new GameSession("barn-single-source-sentinel", "cosmic-horror", CONFIG, undefined, "调查员");
     await session.act("创建角色 investigator 甲");
     const loaded = await session.act("加载模组 普瑞米尔的谷仓");
-    expect(Reflect.get(session, "_moduleLoader")).toBeUndefined();
+    expect(Reflect.ownKeys(session)).not.toContain("_moduleLoader");
     expect(loaded.events.map((event) => event.content).join("\n")).toContain("【统一模组：普瑞米尔的谷仓】");
     const gameSessionSource = maskSource(source("src/api/game-session.ts")).masked;
     for (const identifier of BARN_ONLY_LEGACY_IDENTIFIERS) expect(gameSessionSource).not.toMatch(new RegExp(`\\b${identifier}\\b`));

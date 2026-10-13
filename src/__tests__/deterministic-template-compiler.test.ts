@@ -25,7 +25,7 @@ function compiledInput(draft: ReturnType<typeof compileDeterministicTemplates>, 
   return {
     moduleId: draft.moduleId,
     documentHash: draft.documentHash,
-    sourceGraphSchemaVersion: "1.0.0",
+    sourceGraphSchemaVersion: "1.1.0",
     symbols: draft.mechanicsIR.symbols,
     acceptedInterpretationIds: draft.interpretations.map((interpretation) => interpretation.id),
     compilationMode: "compatible",
@@ -35,6 +35,27 @@ function compiledInput(draft: ReturnType<typeof compileDeterministicTemplates>, 
 }
 
 describe("deterministic marked-item templates", () => {
+  it("keeps context-recognized discovery entries source-exact and scoped to their heading", () => {
+    const graph = graphFor([[
+      "搜查现场：",
+      "搜索房间可以发现以下物品。",
+      "染血钥匙：挂在门后。",
+      "石像：摆在书桌上。",
+    ].join("\n")]);
+    const draft = compileDeterministicTemplates(graph, { moduleId: "template-fixture" });
+    const heading = graph.statements.find((statement) => statement.kind === "heading" && statement.text === "搜查现场：")!;
+    const key = draft.clueCandidates.find((candidate) => candidate.displayName === "染血钥匙")!;
+    const keyItem = graph.statements.find((statement) => statement.id === key.markedItemStatementId)!;
+    const keyName = graph.statements.find((statement) => statement.id === key.nameStatementId)!;
+    const keyBody = graph.statements.find((statement) => statement.id === key.bodyStatementId)!;
+
+    expect(draft.clueCandidates.map((candidate) => candidate.displayName)).toEqual(["染血钥匙", "石像"]);
+    expect(keyItem.parentStatementId).toBe(heading.id);
+    expect(graph.relations.some((relation) => relation.kind === "heading_scopes" && relation.from === heading.id && relation.to === keyItem.id)).toBe(true);
+    expect(keyName.evidence.spans.map((span) => span.exactText).join("")).toBe("染血钥匙");
+    expect(keyBody.evidence.spans.map((span) => span.exactText).join("")).toBe("挂在门后。");
+  });
+
   it("allows the reviewed policy only in compatible mode with its explicit allowlist", () => {
     const graph = graphFor(["场景：\n▶钥匙：桌上有一把钥匙。"]);
     const draft = compileDeterministicTemplates(graph, { moduleId: "template-fixture" });

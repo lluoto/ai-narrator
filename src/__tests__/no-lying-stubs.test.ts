@@ -31,11 +31,7 @@ function textOf(res: { events: { content: unknown }[] }): string {
 describe("出售", () => {
   test("**错误行为的红线**：背包里有的东西，不能说没有", async () => {
     const s = await fresh();
-    const w = (s as unknown as {
-      world: { setPlayerInventory: (p: string, i: string[]) => void };
-      activePlayerId: string;
-    }) as unknown as { world: { setPlayerInventory: (p: string, i: string[]) => void }; activePlayerId: string };
-    w.world.setPlayerInventory(w.activePlayerId, ["手电筒", "绳索"]);
+    expect(s.setPlayerInventory(s.activePlayerId, ["手电筒", "绳索"])).toBe(true);
 
     const out = textOf(await s.act("出售 手电筒"));
     expect(out).not.toContain("背包中没有");

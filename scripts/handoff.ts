@@ -8,7 +8,8 @@
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { spawnSync } from "child_process";
-import { judgeProcess, parseTestOutput, judgeTestCount, type TestBaseline } from "../src/diagnostics/source-scan";
+import { boundedBunFailureDiagnostics, judgeProcess, type TestBaseline } from "../src/diagnostics/source-scan";
+import { collectTestRunEvidence } from "../src/diagnostics/test-run-evidence";
 
 function sh(label: string, command: string, args: string[]): string {
   const result = spawnSync(command, args, { encoding: "utf8" });
@@ -27,24 +28,386 @@ const baseline = existsSync("docs/test-baseline.json")
   : null;
 
 let tests = "（未跑）";
+let testFailureDiagnostics: string[] = [];
 if (!process.argv.includes("--no-test")) {
-  const t = spawnSync("bun", ["test"], { encoding: "utf8" });
-  const text = (t.stdout ?? "") + "\n" + (t.stderr ?? "");
-  const verdict = judgeProcess("bun test", t);
-  const count = parseTestOutput(text);
-  const summary = judgeTestCount(count, baseline ?? { tests: count.tests ?? 0, files: count.files ?? 0 });
+  // Full Bun output can exceed spawnSync's fixed maxBuffer before its terminal
+  // summary. The shared capture drains stdout/stderr concurrently and refuses
+  // startup, stream, limit, exit, or summary failures as test evidence.
+  const evidence = await collectTestRunEvidence("bun", ["test", "--parallel=1", "--timeout", "30000"], baseline ?? { tests: 0, files: 0 });
+  const count = evidence.count;
   const vs = baseline && count.tests !== null ? `（基线 ${baseline.tests}${count.tests < baseline.tests ? " —— **回退了**" : count.tests > baseline.tests ? " —— 记得上调" : "，一致"}）` : "";
-  tests = !verdict.ok
-    ? `（测试未通过：${verdict.reason}）`
-    : summary.problems.length
-      ? `（测试未通过：${summary.problems.join("；")}）`
+  tests = !evidence.ok
+    ? `（测试未通过：${evidence.reason}）`
       : `${count.tests} 条 / ${count.files} 文件，全绿${vs}`;
+  if (!evidence.ok) testFailureDiagnostics = boundedBunFailureDiagnostics(evidence.output);
 }
 
-const rules = existsSync("docs/todo.json")
-  ? JSON.parse(readFileSync("docs/todo.json", "utf8")).items
-      .filter((i: any) => i.category === "工作约定")
-  : [];
+type CurrentWorkItem = {
+  id?: unknown;
+  npcRuntimeTransitionAtomicityClosure?: unknown;
+  npcRuntimeTransitionAtomicityVerification?: unknown;
+  npcRuntimeTransitionAtomicityOpenScope?: unknown;
+  npcCliFanoutAtomicityClosure?: unknown;
+  npcCliFanoutAtomicityVerification?: unknown;
+  npcCliFanoutAtomicityOpenScope?: unknown;
+  npcMemoryAppendAtomicityClosure?: unknown;
+  npcMemoryAppendAtomicityVerification?: unknown;
+  npcMemoryAppendAtomicityOpenScope?: unknown;
+  npcAgentPrivateMemoryStateDispatchClosure?: unknown;
+  npcAgentPrivateMemoryStateDispatchVerification?: unknown;
+  npcAgentPrivateMemoryStateDispatchOpenScope?: unknown;
+  careerLeafLockDeadOwnerRecoveryClosure?: unknown;
+  careerLeafLockDeadOwnerRecoveryVerification?: unknown;
+  careerLeafLockDeadOwnerRecoveryOpenScope?: unknown;
+  gameSessionSetSceneWriterRetirementClosure?: unknown;
+  gameSessionSetSceneWriterRetirementVerification?: unknown;
+  gameSessionSetSceneWriterRetirementOpenScope?: unknown;
+  gameSessionWorldFacadeLifecycleClosure?: unknown;
+  gameSessionWorldFacadeLifecycleVerification?: unknown;
+  gameSessionWorldFacadeLifecycleOpenScope?: unknown;
+  gameSessionClosedLifecycleMutatorGuardClosure?: unknown;
+  gameSessionClosedLifecycleMutatorGuardVerification?: unknown;
+  gameSessionClosedLifecycleMutatorGuardOpenScope?: unknown;
+  playerSessionVisibleToWriterRetirementClosure?: unknown;
+  playerSessionVisibleToWriterRetirementVerification?: unknown;
+  playerSessionVisibleToWriterRetirementOpenScope?: unknown;
+  legacyWorldStateReadOwnershipClosure?: unknown;
+  legacyWorldStateReadOwnershipVerification?: unknown;
+  legacyWorldStateReadOwnershipFinalVerification?: unknown;
+  legacyWorldStateReadOwnershipOpenScope?: unknown;
+  worldDurableCurrentRoundSnapshotAtomicityClosure?: unknown;
+  worldDurableCurrentRoundSnapshotAtomicityVerification?: unknown;
+  worldDurableCurrentRoundSnapshotAtomicityFinalVerification?: unknown;
+  worldDurableCurrentRoundSnapshotAtomicityOpenScope?: unknown;
+  nowAsyncDrainClosure?: unknown;
+  nowAsyncDrainVerification?: unknown;
+  nowAsyncDrainFinalVerification?: unknown;
+  nowAsyncDrainOpenScope?: unknown;
+  openingLifecycleDockerAndBindingCurrentScope?: unknown;
+  compilerAutoAdmissionStartupClosure?: unknown;
+  compilerAutoAdmissionStartupVerification?: unknown;
+  compilerAutoAdmissionStartupOpenScope?: unknown;
+  pdfPrepareIngressAdmissionClosure?: unknown;
+  pdfPrepareIngressAdmissionVerification?: unknown;
+  pdfPrepareIngressAdmissionOpenScope?: unknown;
+  compiledSessionCreationIngressClosure?: unknown;
+  compiledSessionCreationIngressVerification?: unknown;
+  compiledSessionCreationIngressOpenScope?: unknown;
+  handoffProcessCaptureClosure?: unknown;
+  handoffProcessCaptureVerification?: unknown;
+  handoffProcessCaptureOpenScope?: unknown;
+  compiledIntentDurableReplayClosure?: unknown;
+  compiledIntentDurableReplayVerification?: unknown;
+  compiledIntentDurableReplayOpenScope?: unknown;
+  worldSingleActiveSceneInvariantClosure?: unknown;
+  worldSingleActiveSceneInvariantVerification?: unknown;
+  worldSingleActiveSceneInvariantFinalVerification?: unknown;
+  worldSingleActiveSceneInvariantOpenScope?: unknown;
+  worldRelationshipReverseFirstCreateClosure?: unknown;
+  worldRelationshipReverseFirstCreateVerification?: unknown;
+  worldRelationshipReverseFirstCreateFinalVerification?: unknown;
+  worldRelationshipReverseFirstCreateOpenScope?: unknown;
+  compilerJsonIngressAdmissionClosure?: unknown;
+  compilerJsonIngressAdmissionVerification?: unknown;
+  compilerJsonIngressAdmissionOpenScope?: unknown;
+  compiledWorldBindingProductionRegistryClosure?: unknown;
+  compiledWorldBindingProductionRegistryVerification?: unknown;
+  compiledWorldBindingProductionRegistryOpenScope?: unknown;
+  dockerExternalWorldModelMountClosure?: unknown;
+  dockerExternalWorldModelMountVerification?: unknown;
+  dockerExternalWorldModelMountOpenScope?: unknown;
+  openingAdmissionLifecycleOpenScope?: unknown;
+  gameSessionCreatePartyMemberPrivateAuthorityClosure?: unknown;
+  gameSessionCreatePartyMemberPrivateAuthorityVerification?: unknown;
+  gameSessionCreatePartyMemberPrivateAuthorityOpenScope?: unknown;
+  careerHelperRuntimePrivateAuthorityClosure?: unknown;
+  careerHelperRuntimePrivateAuthorityVerification?: unknown;
+  careerHelperRuntimePrivateAuthorityOpenScope?: unknown;
+  preflightAsyncDrainClosure?: unknown;
+  preflightAsyncDrainVerification?: unknown;
+  preflightAsyncDrainOpenScope?: unknown;
+  gameSessionConstructorInstallerPrivateAuthorityProgress?: unknown;
+  gameSessionConstructorInstallerPrivateAuthorityVerification?: unknown;
+  gameSessionConstructorInstallerPrivateAuthorityOpenScope?: unknown;
+  ordinaryOperatorRecoveryClosure?: unknown;
+  ordinaryOperatorRecoveryVerification?: unknown;
+  ordinaryOperatorRecoveryOpenScope?: unknown;
+  compiledActionRuntimePrivateCanonicalCohortClosure?: unknown;
+  compiledActionRuntimePrivateCanonicalCohortVerification?: unknown;
+  compiledActionRuntimePrivateCanonicalCohortOpenScope?: unknown;
+  ordinarySnapshotReplayDirectoryNodeOccupancyClosure?: unknown;
+  ordinarySnapshotReplayDirectoryNodeOccupancyVerification?: unknown;
+  ordinarySnapshotReplayDirectoryNodeOccupancyOpenScope?: unknown;
+  compiledActionRuntimePrivateLoadInstallAuthorityClosure?: unknown;
+  compiledActionRuntimePrivateLoadInstallAuthorityVerification?: unknown;
+  compiledActionRuntimePrivateLoadInstallAuthorityOpenScope?: unknown;
+  compilerAutoHintProposalSingleAttemptClosure?: unknown;
+  compilerAutoHintProposalSingleAttemptVerification?: unknown;
+  compilerAutoHintProposalSingleAttemptOpenScope?: unknown;
+  ordinaryDurableProviderSingleAttemptClosure?: unknown;
+  ordinaryDurableProviderSingleAttemptVerification?: unknown;
+  ordinaryDurableProviderSingleAttemptOpenScope?: unknown;
+  legacyOrdinaryRuntimeInstallPrivateAuthorityClosure?: unknown;
+  legacyOrdinaryRuntimeInstallPrivateAuthorityVerification?: unknown;
+  legacyOrdinaryRuntimeInstallPrivateAuthorityOpenScope?: unknown;
+  sceneEnvironmentAtomicityClosure?: unknown;
+  sceneEnvironmentAtomicityVerification?: unknown;
+  entityUpsertAtomicityClosure?: unknown;
+  entityUpsertAtomicityVerification?: unknown;
+  incrementClueFailAtomicityClosure?: unknown;
+  incrementClueFailAtomicityVerification?: unknown;
+  tickEffectsAtomicityClosure?: unknown;
+  tickEffectsAtomicityVerification?: unknown;
+  applyDamageAtomicityClosure?: unknown;
+  applyDamageAtomicityVerification?: unknown;
+  preflightReliabilityClosure?: unknown;
+  preflightReliabilityVerification?: unknown;
+  activeSceneAtomicityClosure?: unknown;
+  activeSceneAtomicityVerification?: unknown;
+  ordinaryFirstAcquireRaceClosure?: unknown;
+  ordinaryFirstAcquireRaceVerification?: unknown;
+  gameSessionPublicViewIsolationClosure?: unknown;
+  gameSessionPublicViewIsolationVerification?: unknown;
+  worldModelPromptStructuredValueClosure?: unknown;
+  worldModelPromptStructuredValueVerification?: unknown;
+  sharedWorldModelIsolationClosure?: unknown;
+  sharedWorldModelIsolationVerification?: unknown;
+  barnCrossPageAtomClosure?: unknown;
+  barnCrossPageAtomVerification?: unknown;
+  ordinarySnapshotBuildDomainClosure?: unknown;
+  ordinarySnapshotBuildDomainVerification?: unknown;
+  compiledIntentAdmissionContentionClosure?: unknown;
+  compiledIntentAdmissionContentionVerification?: unknown;
+  ordinaryHpTruthAndBoundaryAuditClosure?: unknown;
+  ordinaryHpTruthAndBoundaryAuditVerification?: unknown;
+  twoRealModuleAndScopedWorldModelProgress?: unknown;
+  twoRealModuleAndScopedWorldModelVerification?: unknown;
+  freshRuntimeAndWorldAvailabilityClosure?: unknown;
+  freshRuntimeAndWorldAvailabilityVerification?: unknown;
+  diagnosticIntentApiProgress?: unknown;
+  diagnosticIntentApiVerification?: unknown;
+  fuzuCurrentSchemaAcceptanceClosure?: unknown;
+  fuzuCurrentSchemaAcceptanceVerification?: unknown;
+  controlStatePruningClosure?: unknown;
+  controlStatePruningVerification?: unknown;
+  ordinaryProseFactFindingClosure?: unknown;
+  ordinaryProseFactFindingVerification?: unknown;
+  compiledSessionSnapshotQuotaGcClosure?: unknown;
+  compiledSessionSnapshotQuotaGcVerification?: unknown;
+  compiledSessionSnapshotCasClosure?: unknown;
+  compiledSessionSnapshotCasVerification?: unknown;
+  catalogCrossProcessQuotaClosure?: unknown;
+  catalogCrossProcessQuotaVerification?: unknown;
+  catalogDurablePublicationClosure?: unknown;
+  catalogDurablePublicationVerification?: unknown;
+  automaticSourceExactNpcEncounterClosure?: unknown;
+  automaticSourceExactNpcEncounterVerification?: unknown;
+  fuzuTrackedReviewFixtureClosure?: unknown;
+  fuzuTrackedReviewFixtureVerification?: unknown;
+  actorEffectEventSlotClosure?: unknown;
+  actorEffectEventSlotVerification?: unknown;
+  filmSanityOpeningClosure?: unknown;
+  filmSanityOpeningVerification?: unknown;
+  clueFactFacetClosure?: unknown;
+  clueFactFacetVerification?: unknown;
+  latestSourceRuntimeQualityProgress?: unknown;
+  latestSourceRuntimeQualityVerification?: unknown;
+  latestPlayerIntentProgress?: unknown;
+  latestPlayerIntentVerification?: unknown;
+  latestSourceRuntimeProgress?: unknown;
+  latestSourceRuntimeVerification?: unknown;
+  latestPlayerDeliveryProgress?: unknown;
+  latestPlayerDeliveryVerification?: unknown;
+};
+
+function renderCurrentProductionIncrement(items: CurrentWorkItem[]): string {
+  const item = items.find((candidate) => candidate.id === "todo-64");
+  const admission = items.find((candidate) => candidate.id === "todo-65");
+  const currentScopes = [
+    admission?.npcRuntimeTransitionAtomicityOpenScope,
+    admission?.npcCliFanoutAtomicityOpenScope,
+    admission?.npcMemoryAppendAtomicityOpenScope,
+    admission?.npcAgentPrivateMemoryStateDispatchOpenScope,
+    admission?.careerLeafLockDeadOwnerRecoveryOpenScope,
+    admission?.gameSessionSetSceneWriterRetirementOpenScope,
+    admission?.gameSessionWorldFacadeLifecycleOpenScope,
+    admission?.gameSessionClosedLifecycleMutatorGuardOpenScope,
+    admission?.playerSessionVisibleToWriterRetirementOpenScope,
+    admission?.legacyWorldStateReadOwnershipOpenScope,
+    admission?.worldDurableCurrentRoundSnapshotAtomicityOpenScope,
+    admission?.nowAsyncDrainOpenScope,
+    admission?.worldSingleActiveSceneInvariantOpenScope,
+    admission?.worldRelationshipReverseFirstCreateOpenScope,
+    admission?.compiledIntentDurableReplayOpenScope,
+    admission?.handoffProcessCaptureOpenScope,
+    item?.compiledSessionCreationIngressOpenScope,
+    item?.compilerJsonIngressAdmissionOpenScope,
+    item?.pdfPrepareIngressAdmissionOpenScope,
+    item?.compilerAutoAdmissionStartupOpenScope,
+    item?.dockerExternalWorldModelMountOpenScope,
+    item?.compiledWorldBindingProductionRegistryOpenScope,
+    item?.openingLifecycleDockerAndBindingCurrentScope,
+    admission?.legacyOrdinaryRuntimeInstallPrivateAuthorityOpenScope,
+    admission?.ordinaryDurableProviderSingleAttemptOpenScope,
+    admission?.compiledActionRuntimePrivateLoadInstallAuthorityOpenScope,
+    admission?.compilerAutoHintProposalSingleAttemptOpenScope,
+    admission?.compiledActionRuntimePrivateCanonicalCohortOpenScope,
+    admission?.ordinarySnapshotReplayDirectoryNodeOccupancyOpenScope,
+    admission?.gameSessionConstructorInstallerPrivateAuthorityOpenScope,
+    admission?.preflightAsyncDrainOpenScope,
+    admission?.careerHelperRuntimePrivateAuthorityOpenScope,
+    admission?.gameSessionCreatePartyMemberPrivateAuthorityOpenScope,
+    admission?.ordinaryOperatorRecoveryOpenScope,
+    admission?.openingAdmissionLifecycleOpenScope,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  const candidates: Array<readonly [unknown, unknown]> = [
+    [
+      admission?.npcRuntimeTransitionAtomicityClosure,
+      admission?.npcRuntimeTransitionAtomicityVerification,
+    ],
+    [
+      admission?.npcCliFanoutAtomicityClosure,
+      admission?.npcCliFanoutAtomicityVerification,
+    ],
+    [
+      admission?.npcMemoryAppendAtomicityClosure,
+      admission?.npcMemoryAppendAtomicityVerification,
+    ],
+    [
+      admission?.npcAgentPrivateMemoryStateDispatchClosure,
+      admission?.npcAgentPrivateMemoryStateDispatchVerification,
+    ],
+    [
+      admission?.careerLeafLockDeadOwnerRecoveryClosure,
+      admission?.careerLeafLockDeadOwnerRecoveryVerification,
+    ],
+    [
+      admission?.gameSessionSetSceneWriterRetirementClosure,
+      admission?.gameSessionSetSceneWriterRetirementVerification,
+    ],
+    [
+      admission?.gameSessionWorldFacadeLifecycleClosure,
+      admission?.gameSessionWorldFacadeLifecycleVerification,
+    ],
+    [
+      admission?.gameSessionClosedLifecycleMutatorGuardClosure,
+      admission?.gameSessionClosedLifecycleMutatorGuardVerification,
+    ],
+    [
+      admission?.playerSessionVisibleToWriterRetirementClosure,
+      admission?.playerSessionVisibleToWriterRetirementVerification,
+    ],
+    [
+      admission?.legacyWorldStateReadOwnershipClosure,
+      admission?.legacyWorldStateReadOwnershipFinalVerification
+        ?? admission?.legacyWorldStateReadOwnershipVerification,
+    ],
+    [
+      admission?.worldDurableCurrentRoundSnapshotAtomicityClosure,
+      admission?.worldDurableCurrentRoundSnapshotAtomicityFinalVerification
+        ?? admission?.worldDurableCurrentRoundSnapshotAtomicityVerification,
+    ],
+    [
+      admission?.nowAsyncDrainClosure,
+      admission?.nowAsyncDrainFinalVerification ?? admission?.nowAsyncDrainVerification,
+    ],
+    [
+      admission?.worldSingleActiveSceneInvariantClosure,
+      admission?.worldSingleActiveSceneInvariantFinalVerification
+        ?? admission?.worldSingleActiveSceneInvariantVerification,
+    ],
+    [
+      admission?.worldRelationshipReverseFirstCreateClosure,
+      admission?.worldRelationshipReverseFirstCreateFinalVerification
+        ?? admission?.worldRelationshipReverseFirstCreateVerification,
+    ],
+    [admission?.compiledIntentDurableReplayClosure, admission?.compiledIntentDurableReplayVerification],
+    [admission?.handoffProcessCaptureClosure, admission?.handoffProcessCaptureVerification],
+    [item?.compiledSessionCreationIngressClosure, item?.compiledSessionCreationIngressVerification],
+    [item?.compilerJsonIngressAdmissionClosure, item?.compilerJsonIngressAdmissionVerification],
+    [item?.pdfPrepareIngressAdmissionClosure, item?.pdfPrepareIngressAdmissionVerification],
+    [item?.compilerAutoAdmissionStartupClosure, item?.compilerAutoAdmissionStartupVerification],
+    [item?.dockerExternalWorldModelMountClosure, item?.dockerExternalWorldModelMountVerification],
+    [item?.compiledWorldBindingProductionRegistryClosure, item?.compiledWorldBindingProductionRegistryVerification],
+    [admission?.legacyOrdinaryRuntimeInstallPrivateAuthorityClosure, admission?.legacyOrdinaryRuntimeInstallPrivateAuthorityVerification],
+    [admission?.ordinaryDurableProviderSingleAttemptClosure, admission?.ordinaryDurableProviderSingleAttemptVerification],
+    [admission?.compiledActionRuntimePrivateLoadInstallAuthorityClosure, admission?.compiledActionRuntimePrivateLoadInstallAuthorityVerification],
+    [admission?.compilerAutoHintProposalSingleAttemptClosure, admission?.compilerAutoHintProposalSingleAttemptVerification],
+    [admission?.compiledActionRuntimePrivateCanonicalCohortClosure, admission?.compiledActionRuntimePrivateCanonicalCohortVerification],
+    [admission?.ordinarySnapshotReplayDirectoryNodeOccupancyClosure, admission?.ordinarySnapshotReplayDirectoryNodeOccupancyVerification],
+    [admission?.gameSessionConstructorInstallerPrivateAuthorityProgress, admission?.gameSessionConstructorInstallerPrivateAuthorityVerification],
+    [admission?.preflightAsyncDrainClosure, admission?.preflightAsyncDrainVerification],
+    [admission?.careerHelperRuntimePrivateAuthorityClosure, admission?.careerHelperRuntimePrivateAuthorityVerification],
+    [admission?.gameSessionCreatePartyMemberPrivateAuthorityClosure, admission?.gameSessionCreatePartyMemberPrivateAuthorityVerification],
+    [admission?.ordinaryOperatorRecoveryClosure, admission?.ordinaryOperatorRecoveryVerification],
+    [item?.sceneEnvironmentAtomicityClosure, item?.sceneEnvironmentAtomicityVerification],
+    [item?.entityUpsertAtomicityClosure, item?.entityUpsertAtomicityVerification],
+    [item?.incrementClueFailAtomicityClosure, item?.incrementClueFailAtomicityVerification],
+    [item?.tickEffectsAtomicityClosure, item?.tickEffectsAtomicityVerification],
+    [item?.applyDamageAtomicityClosure, item?.applyDamageAtomicityVerification],
+    [item?.preflightReliabilityClosure, item?.preflightReliabilityVerification],
+    [item?.activeSceneAtomicityClosure, item?.activeSceneAtomicityVerification],
+    [item?.ordinaryFirstAcquireRaceClosure, item?.ordinaryFirstAcquireRaceVerification],
+    [item?.gameSessionPublicViewIsolationClosure, item?.gameSessionPublicViewIsolationVerification],
+    [item?.worldModelPromptStructuredValueClosure, item?.worldModelPromptStructuredValueVerification],
+    [item?.sharedWorldModelIsolationClosure, item?.sharedWorldModelIsolationVerification],
+    [item?.barnCrossPageAtomClosure, item?.barnCrossPageAtomVerification],
+    [item?.ordinarySnapshotBuildDomainClosure, item?.ordinarySnapshotBuildDomainVerification],
+    [item?.compiledIntentAdmissionContentionClosure, item?.compiledIntentAdmissionContentionVerification],
+    [item?.ordinaryHpTruthAndBoundaryAuditClosure, item?.ordinaryHpTruthAndBoundaryAuditVerification],
+    [item?.twoRealModuleAndScopedWorldModelProgress, item?.twoRealModuleAndScopedWorldModelVerification],
+    [item?.freshRuntimeAndWorldAvailabilityClosure, item?.freshRuntimeAndWorldAvailabilityVerification],
+    [item?.fuzuCurrentSchemaAcceptanceClosure, item?.fuzuCurrentSchemaAcceptanceVerification],
+    [item?.diagnosticIntentApiProgress, item?.diagnosticIntentApiVerification],
+    [item?.controlStatePruningClosure, item?.controlStatePruningVerification],
+    [item?.ordinaryProseFactFindingClosure, item?.ordinaryProseFactFindingVerification],
+    [item?.compiledSessionSnapshotQuotaGcClosure, item?.compiledSessionSnapshotQuotaGcVerification],
+    [item?.compiledSessionSnapshotCasClosure, item?.compiledSessionSnapshotCasVerification],
+    [item?.catalogCrossProcessQuotaClosure, item?.catalogCrossProcessQuotaVerification],
+    [item?.catalogDurablePublicationClosure, item?.catalogDurablePublicationVerification],
+    [item?.automaticSourceExactNpcEncounterClosure, item?.automaticSourceExactNpcEncounterVerification],
+    [item?.fuzuTrackedReviewFixtureClosure, item?.fuzuTrackedReviewFixtureVerification],
+    [item?.actorEffectEventSlotClosure, item?.actorEffectEventSlotVerification],
+    [item?.filmSanityOpeningClosure, item?.filmSanityOpeningVerification],
+    [item?.clueFactFacetClosure, item?.clueFactFacetVerification],
+    [item?.latestSourceRuntimeQualityProgress, item?.latestSourceRuntimeQualityVerification],
+    [item?.latestPlayerIntentProgress, item?.latestPlayerIntentVerification],
+    [item?.latestSourceRuntimeProgress, item?.latestSourceRuntimeVerification],
+    [item?.latestPlayerDeliveryProgress, item?.latestPlayerDeliveryVerification],
+  ];
+  // Keep a bounded, explicit ten-record priority cohort. New NPC runtime
+  // and CLI-fanout records lead it while retaining the eight older allowlisted
+  // mappings, instead of being replaced by a broad historic scan.
+  const currentLimit = Math.max(5, candidates.slice(0, 10).filter(([scopeCandidate, verificationCandidate]) => (
+    typeof scopeCandidate === "string" && scopeCandidate.trim().length > 0
+      && typeof verificationCandidate === "string" && verificationCandidate.trim().length > 0
+  )).length);
+  const current = candidates
+    .map(([scopeCandidate, verificationCandidate]): [string, string] => [
+      typeof scopeCandidate === "string" ? scopeCandidate.trim() : "",
+      typeof verificationCandidate === "string" ? verificationCandidate.trim() : "",
+    ])
+    .filter(([scope, verification]) => Boolean(scope && verification))
+    .slice(0, currentLimit);
+  if (currentScopes.length === 0 && current.length === 0) return "";
+  const scope = [...currentScopes, ...current.map(([value]) => value)].join("\n\n");
+  const verification = current.map(([, value]) => value).join("\n\n");
+  return `## 当前生产化增量
+
+${scope}
+${verification ? `
+
+### 验收记录
+
+${verification}` : ""}`;
+}
+
+const todo = existsSync("docs/todo.json")
+  ? JSON.parse(readFileSync("docs/todo.json", "utf8"))
+  : null;
+const rules = todo?.items.filter((i: any) => i.category === "工作约定") ?? [];
+const currentProductionIncrement = renderCurrentProductionIncrement(todo?.items ?? []);
 
 const openItems = existsSync("docs/notes/index.json")
   ? JSON.parse(readFileSync("docs/notes/index.json", "utf8")).records
@@ -69,7 +432,7 @@ const md = `# 接手说明
 三条并行的局面驱动是**有意为之**，不是重复实现：
 剧本杀（\`play-module.ts\`）／自由跑团（\`api/game-session.ts\`）／命令行（\`index.ts\`）。
 
-${checkpoint}${checkpoint ? "\n\n" : ""}## 第一件事：读这三份
+${currentProductionIncrement}${currentProductionIncrement ? "\n\n" : ""}${checkpoint}${checkpoint ? "\n\n" : ""}## 第一件事：读这三份
 
 \`\`\`
 docs/now.md                          现在在哪（30 秒）
@@ -217,3 +580,7 @@ preflight 会报（tsc 不报）。
 // Exit success means the snapshot was written, not that its test child passed.
 writeFileSync("docs/handoff.md", md, "utf8");
 console.log(`docs/handoff.md 已生成 —— ${md.split("\n").length} 行 / ${(md.length / 1024).toFixed(1)} KB`);
+if (testFailureDiagnostics.length) {
+  console.log("\n  bun test bounded failure context:");
+  for (const line of testFailureDiagnostics) console.log("    " + line);
+}

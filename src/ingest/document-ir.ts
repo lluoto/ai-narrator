@@ -41,7 +41,7 @@ export interface EvidenceRef {
   precision: EvidencePrecision;
 }
 
-export type DocumentBlockKind = "heading" | "paragraph" | "marked_item" | "list_item" | "unknown";
+export type DocumentBlockKind = "heading" | "paragraph" | "marked_item" | "list_item" | "table_row" | "unknown";
 
 export interface DocumentBlock {
   id: string;

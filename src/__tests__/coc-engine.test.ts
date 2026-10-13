@@ -14,6 +14,10 @@ import {
   type HitLocation,
 } from "../rules/coc-engine";
 
+function restoreSanity(engine: SanityEngine, patch: Partial<SanityEngine["state"]>): void {
+  engine.restoreState({ ...engine.state, ...patch });
+}
+
 // ============================================================
 // CoCEngine: skillCheck
 // ============================================================
@@ -190,7 +194,7 @@ describe("SanityEngine.sanityCheck()", () => {
     try {
       Math.random = () => 0.999;           // d100 = 100，必定失败
       const e = new SanityEngine(50);
-      e.state.sanLostThisRound = 5;
+      restoreSanity(e, { sanLostThisRound: 5 });
       const r = e.sanityCheck("0/5");
       expect(r.passed).toBe(false);
       expect(r.sanLoss).toBe(5);
@@ -203,7 +207,7 @@ describe("SanityEngine.sanityCheck()", () => {
     // 通过 sanityCheck 触发累计损失 ≥ 20% maxSAN
     // maxSAN=50, 20%=10, 需要累计掉至少 10
     // 直接调用几次大损失
-    e.state.currentSAN = 39; // 已累计损失 11 (>10)
+    restoreSanity(e, { currentSAN: 39 }); // 已累计损失 11 (>10)
     // indefiniteInsanity 只在 sanityCheck 中设置, 调用一次触发
     e.sanityCheck("0/1");
     expect(e.state.indefiniteInsanity).toBe(true);
@@ -218,7 +222,7 @@ describe("SanityEngine.sanityCheck()", () => {
     try {
       for (let i = 0; i < 200 && !seen; i++) {
         const e = new SanityEngine(50);
-        e.state.sanLostThisRound = 5;
+        restoreSanity(e, { sanLostThisRound: 5 });
         const r = e.sanityCheck("0/1d6");
         if (r.newPhobia) {
           seen = true;
@@ -231,8 +235,7 @@ describe("SanityEngine.sanityCheck()", () => {
 
   it("重置后 insanity 状态可共存", () => {
     const e = new SanityEngine(50);
-    e.state.temporaryInsanity = true;
-    e.state.indefiniteInsanity = true;
+    restoreSanity(e, { temporaryInsanity: true, indefiniteInsanity: true });
     expect(e.state.temporaryInsanity).toBe(true);
     expect(e.state.indefiniteInsanity).toBe(true);
   });
@@ -426,6 +429,11 @@ describe("SanityEngine.parseSanCost()", () => {
     expect(result).toBeLessThanOrEqual(12);
   });
 
+  it("兑现典籍 SAN 骰子修正项，而不是静默忽略 +K", () => {
+    expect(SanityEngine.parseSanCost("1d3+1", () => 0)).toBe(2);
+    expect(SanityEngine.parseSanCost("2d4+3", () => 0)).toBe(5);
+  });
+
   it("解析纯数字字符串", () => {
     expect(SanityEngine.parseSanCost("5")).toBe(5);
   });
@@ -456,51 +464,13 @@ describe("SanityEngine.parseSanCost()", () => {
 });
 
 // ============================================================
-// SanityEngine: recoverSan / resetDaily 边界
+// SanityEngine: resetDaily 边界
 // ============================================================
-
-describe("SanityEngine.recoverSan()", () => {
-  it("正常恢复 SAN", () => {
-    const e = new SanityEngine(60);
-    e.state.currentSAN = 40;
-    e.recoverSan(10);
-    expect(e.state.currentSAN).toBe(50);
-  });
-
-  it("恢复不超过 maxSAN", () => {
-    const e = new SanityEngine(60);
-    e.state.currentSAN = 55;
-    e.recoverSan(10);
-    expect(e.state.currentSAN).toBe(60);
-  });
-
-  it("恢复 0 SAN 不改变", () => {
-    const e = new SanityEngine(60);
-    e.state.currentSAN = 40;
-    e.recoverSan(0);
-    expect(e.state.currentSAN).toBe(40);
-  });
-
-  it("恢复负数等于扣减", () => {
-    const e = new SanityEngine(60);
-    e.state.currentSAN = 40;
-    e.recoverSan(-5);
-    expect(e.state.currentSAN).toBe(35);
-  });
-
-  it("恢复过多负数导致低于 0", () => {
-    const e = new SanityEngine(60);
-    e.state.currentSAN = 3;
-    e.recoverSan(-10);
-    expect(e.state.currentSAN).toBe(-7);
-  });
-});
 
 describe("SanityEngine.resetDaily()", () => {
   it("重置 sanLostThisRound 和临时疯狂标志", () => {
     const e = new SanityEngine(60);
-    e.state.sanLostThisRound = 8;
-    e.state.temporaryInsanity = true;
+    restoreSanity(e, { sanLostThisRound: 8, temporaryInsanity: true });
     e.resetDaily();
     expect(e.state.sanLostThisRound).toBe(0);
     expect(e.state.temporaryInsanity).toBe(false);
@@ -508,8 +478,7 @@ describe("SanityEngine.resetDaily()", () => {
 
   it("保持不定疯狂状态不变", () => {
     const e = new SanityEngine(60);
-    e.state.indefiniteInsanity = true;
-    e.state.indefiniteLevel = "moderate";
+    restoreSanity(e, { indefiniteInsanity: true, indefiniteLevel: "moderate" });
     e.resetDaily();
     expect(e.state.indefiniteInsanity).toBe(true);
     expect(e.state.indefiniteLevel).toBe("moderate");
@@ -551,7 +520,7 @@ describe("SanityEngine.learnCthulhuMythos()", () => {
 
   it("currentSAN 被 maxSAN 限制不超出", () => {
     const e = new SanityEngine(60);
-    e.state.currentSAN = 60;
+    restoreSanity(e, { currentSAN: 60 });
     e.learnCthulhuMythos(10, "测试");
     expect(e.state.currentSAN).toBeLessThanOrEqual(e.state.maxSAN);
   });
@@ -574,79 +543,67 @@ describe("SanityEngine.learnCthulhuMythos()", () => {
 });
 
 // ============================================================
-// SanityEngine: rollNightmare / handleLongRest 边界
+// SanityEngine: handleLongRest 边界
 // ============================================================
 
-describe("SanityEngine.rollNightmare()", () => {
-  it("无不定疯狂时返回 null", () => {
+describe("SanityEngine.handleLongRest()", () => {
+  it("无不定疯狂时不触发噩梦", () => {
     const e = new SanityEngine(60);
-    const r = e.rollNightmare();
-    expect(r).toBeNull();
+    restoreSanity(e, { nightmareStreak: 3 });
+    const r = e.handleLongRest();
+    expect(r.nightmare).toBe(false);
     expect(e.state.nightmareStreak).toBe(0);
   });
 
-  it("不定疯狂时有概率触发噩梦", () => {
-    // 通过多轮统计验证
+  it("重度不定疯狂的长休噩梦扣除 SAN", () => {
     const e = new SanityEngine(60);
-    e.state.indefiniteInsanity = true;
-    e.state.indefiniteLevel = "mild";
-    let triggered = 0;
-    const trials = 1000;
-    for (let i = 0; i < trials; i++) {
-      const r = e.rollNightmare();
-      if (r) triggered++;
+    restoreSanity(e, { indefiniteInsanity: true, indefiniteLevel: "severe", currentSAN: 40 });
+    const real = Math.random;
+    try {
+      Math.random = () => 0;
+      const r = e.handleLongRest();
+      expect(r.nightmare).toBe(true);
+      expect(r.message).toContain("[SAN -1]");
+      expect(e.state.currentSAN).toBe(39);
+    } finally {
+      Math.random = real;
     }
-    // mild 噩梦概率 30%，1000 次应至少触发 50 次
-    expect(triggered).toBeGreaterThan(50);
-    expect(triggered).toBeLessThan(600);
   });
 
-  it("噩梦消耗 SAN", () => {
-    const e = new SanityEngine(60);
-    e.state.indefiniteInsanity = true;
-    e.state.indefiniteLevel = "severe";
-    e.state.currentSAN = 40;
-    // 噩梦是否触发带随机，但**一旦触发就必须扣 SAN** —— 这条不变量与掷骰无关。
-    // 原先 `if (r)` 不成立时一条都不验，而「没触发」恰恰是最常见的情况。
-    // 多试几次拿样本；一个都拿不到就该红（那说明噩梦根本不会触发）。
-    let r = e.rollNightmare();
-    for (let i = 0; i < 200 && !r; i++) {
-      e.state.currentSAN = 40;
-      r = e.rollNightmare();
-    }
-    expect(r).toBeTruthy(); // 200 次都没触发 = 这条什么都没验
-    if (r) {
-      expect(e.state.currentSAN).toBeLessThan(40);
-      expect(r.sanLoss).toBeGreaterThan(0);
-    }
-  });
-});
-
-describe("SanityEngine.handleLongRest()", () => {
   it("不定疯狂时自然恢复 SAN", () => {
     const e = new SanityEngine(60);
-    e.state.indefiniteInsanity = true;
-    e.state.indefiniteLevel = "mild";
-    e.state.currentSAN = 30;
-    // 抑制噩梦随机性：将 nightmareStreak 设为非 0 以跳过多项判定
-    // 多次运行捕捉自然恢复与噩梦的净效果
-    let sawRecovery = false;
-    for (let i = 0; i < 30; i++) {
-      const e2 = new SanityEngine(60);
-      e2.state.indefiniteInsanity = true;
-      e2.state.indefiniteLevel = "mild";
-      e2.state.currentSAN = 30;
-      const r = e2.handleLongRest();
-      if (r.sanRecovered > 0) {
-        // 有自然恢复时，currentSAN 应变化（可能被噩梦抵消，但结构正确）
-        expect(r.sanRecovered).toBeGreaterThanOrEqual(1);
-        expect(r.sanRecovered).toBeLessThanOrEqual(3); // mild: 1d3
-        sawRecovery = true;
-        break;
-      }
+    restoreSanity(e, { indefiniteInsanity: true, indefiniteLevel: "mild", currentSAN: 30 });
+    const real = Math.random;
+    try {
+      Math.random = () => 0.999;
+      const r = e.handleLongRest();
+      expect(r.nightmare).toBe(false);
+      expect(r.sanRecovered).toBe(1);
+      expect(e.state.currentSAN).toBe(31);
+    } finally {
+      Math.random = real;
     }
-    // mild 恢复率 1d3（30% 噩梦概率），30 次循环应至少看到一次恢复
-    expect(sawRecovery).toBe(true);
+  });
+
+  it("第七次确定噩梦会记录不可逆改变", () => {
+    const e = new SanityEngine(60);
+    restoreSanity(e, {
+      indefiniteInsanity: true,
+      indefiniteLevel: "severe",
+      currentSAN: 40,
+      nightmareStreak: 6,
+    });
+    const real = Math.random;
+    try {
+      Math.random = () => 0;
+      const r = e.handleLongRest();
+      expect(r.nightmare).toBe(true);
+      expect(e.state.nightmareStreak).toBe(7);
+      expect(e.state.irreversibleChanges).toHaveLength(1);
+      expect(e.state.irreversibleChanges[0]).toContain("连续七日噩梦侵蚀");
+    } finally {
+      Math.random = real;
+    }
   });
 });
 
@@ -657,19 +614,27 @@ describe("SanityEngine.handleLongRest()", () => {
 describe("SanityEngine.therapyCheck()", () => {
   it("治疗失败返回无效果", () => {
     const e = new SanityEngine(60);
-    e.state.indefiniteInsanity = true;
-    e.state.indefiniteLevel = "moderate";
+    restoreSanity(e, { indefiniteInsanity: true, indefiniteLevel: "moderate" });
     const r = e.therapyCheck(80, 50); // roll=80 > skill=50 → 失败
     expect(r.success).toBe(false);
     expect(r.sanRecovered).toBe(0);
     expect(r.message).toBe("心理治疗未产生效果。");
   });
 
+  it("治疗失败保持 SAN 和修订不变", () => {
+    const e = new SanityEngine(60);
+    restoreSanity(e, { currentSAN: 40, indefiniteInsanity: true, indefiniteLevel: "moderate" });
+    const before = e.state;
+    const revision = e.semanticRevision;
+    const r = e.therapyCheck(80, 50);
+    expect(r.sanRecovered).toBe(0);
+    expect(e.state).toBe(before);
+    expect(e.semanticRevision).toBe(revision);
+  });
+
   it("治疗成功恢复 SAN", () => {
     const e = new SanityEngine(60);
-    e.state.indefiniteInsanity = true;
-    e.state.indefiniteLevel = "moderate";
-    e.state.currentSAN = 30;
+    restoreSanity(e, { indefiniteInsanity: true, indefiniteLevel: "moderate", currentSAN: 30 });
     const r = e.therapyCheck(30, 50); // roll=30 ≤ skill=50 → 成功
     expect(r.success).toBe(true);
     expect(r.sanRecovered).toBeGreaterThanOrEqual(1);
@@ -677,6 +642,41 @@ describe("SanityEngine.therapyCheck()", () => {
     expect(r.progressGained).toBeGreaterThanOrEqual(15);
     expect(r.progressGained).toBeLessThanOrEqual(30);
     expect(e.state.currentSAN).toBe(30 + r.sanRecovered);
+  });
+
+  it("治疗恢复不会超过 maxSAN", () => {
+    const e = new SanityEngine(60);
+    restoreSanity(e, { indefiniteInsanity: true, indefiniteLevel: "moderate", currentSAN: 60 });
+    const r = e.therapyCheck(30, 50);
+    expect(r.success).toBe(true);
+    expect(r.sanRecovered).toBeGreaterThan(0);
+    expect(e.state.currentSAN).toBe(60);
+  });
+
+  it("治疗成功推进公开可观察的治疗进度", () => {
+    const e = new SanityEngine(60);
+    restoreSanity(e, { currentSAN: 30, indefiniteInsanity: true, indefiniteLevel: "moderate", therapyProgress: 0 });
+    const r = e.therapyCheck(30, 50);
+    expect(r.success).toBe(true);
+    expect(e.state.therapyProgress).toBe(r.progressGained);
+  });
+
+  it("拒绝负数治疗骰值且不改变状态", () => {
+    const e = new SanityEngine(60);
+    const before = e.state;
+    const revision = e.semanticRevision;
+    expect(() => e.therapyCheck(-1, 50)).toThrow();
+    expect(e.state).toBe(before);
+    expect(e.semanticRevision).toBe(revision);
+  });
+
+  it("拒绝超范围治疗技能值且不改变状态", () => {
+    const e = new SanityEngine(60);
+    const before = e.state;
+    const revision = e.semanticRevision;
+    expect(() => e.therapyCheck(1, 101)).toThrow();
+    expect(e.state).toBe(before);
+    expect(e.semanticRevision).toBe(revision);
   });
 });
 
@@ -693,7 +693,7 @@ describe("SanityEngine.checkPhobiaConflict()", () => {
 
   it("匹配恐惧症时冲突", () => {
     const e = new SanityEngine(60);
-    e.state.phobias = ["黑暗恐惧症"];
+    restoreSanity(e, { phobias: ["黑暗恐惧症"] });
     const r = e.checkPhobiaConflict("黑暗");
     expect(r.conflicts).toBe(true);
     expect(r.penalty).toBeTruthy();
@@ -701,7 +701,7 @@ describe("SanityEngine.checkPhobiaConflict()", () => {
 
   it("不匹配恐惧症时不冲突", () => {
     const e = new SanityEngine(60);
-    e.state.phobias = ["恐高症"];
+    restoreSanity(e, { phobias: ["恐高症"] });
     const r = e.checkPhobiaConflict("黑暗");
     expect(r.conflicts).toBe(false);
   });
@@ -717,6 +717,104 @@ describe("SanityEngine.getSummary()", () => {
     const summary = e.getSummary();
     expect(summary).toContain("SAN");
     expect(summary).toContain("65");
+  });
+});
+
+describe("SanityEngine state ownership", () => {
+  it("does not expose writable top-level, nested-array, whole-state, or mythos-log aliases", () => {
+    const engine = new SanityEngine(60);
+    engine.learnCthulhuMythos(1, "owned tome");
+    const before = structuredClone(engine.state);
+    const view = engine.state as any;
+
+    expect(() => { view.currentSAN = 1; }).toThrow(TypeError);
+    expect(() => { view.phobias.push("alias phobia"); }).toThrow(TypeError);
+    expect(() => { view.mythosLog[0].source = "alias source"; }).toThrow(TypeError);
+    expect(() => { (engine as any).state = { ...view, currentSAN: 1 }; }).toThrow(TypeError);
+    expect(engine.state).toEqual(before);
+  });
+
+  it("owns restored input instead of retaining top-level or nested aliases", () => {
+    const engine = new SanityEngine(60);
+    const input = structuredClone(engine.state) as any;
+    input.currentSAN = 40;
+    input.phobias.push("restored phobia");
+    input.mythosLog.push({ source: "restored tome", gain: 1, maxSanLoss: 1 });
+
+    engine.restoreState(input);
+    input.currentSAN = 1;
+    input.phobias[0] = "mutated alias";
+    input.mythosLog[0].source = "mutated source";
+
+    expect(engine.state.currentSAN).toBe(40);
+    expect(engine.state.phobias).toEqual(["restored phobia"]);
+    expect(engine.state.mythosLog[0]?.source).toBe("restored tome");
+  });
+
+  it("rejects negative or fractional loss without changing state or revision", () => {
+    const engine = new SanityEngine(60);
+    const before = engine.state;
+    expect(() => engine.applyLoss(-1)).toThrow();
+    expect(() => engine.applyLoss(0.5)).toThrow();
+    expect(engine.state).toBe(before);
+    expect(engine.semanticRevision).toBe(0n);
+  });
+
+  it("validates exact restored shape, scalar ranges, and nested mythos entries", () => {
+    const engine = new SanityEngine(60);
+    const valid = structuredClone(engine.state) as any;
+    const invalid = [
+      null,
+      { ...valid, extra: true },
+      { ...valid, currentSAN: 61 },
+      { ...valid, maxSAN: -1 },
+      { ...valid, therapyProgress: 101 },
+      { ...valid, phobias: [1] },
+      { ...valid, mythosLog: [{ source: "tome", gain: 1, maxSanLoss: 1, extra: true }] },
+      { ...valid, mythosLog: [{ source: "", gain: 1, maxSanLoss: 1 }] },
+    ];
+    const before = engine.state;
+    const revision = engine.semanticRevision;
+    for (const candidate of invalid) expect(() => engine.restoreState(candidate)).toThrow();
+    expect(engine.state).toBe(before);
+    expect(engine.semanticRevision).toBe(revision);
+  });
+
+  it("does not revise fresh resetDaily or an exact restore", () => {
+    const engine = new SanityEngine(60);
+    const view = engine.state;
+    engine.resetDaily();
+    engine.restoreState(structuredClone(view));
+    expect(engine.semanticRevision).toBe(0n);
+    expect(engine.state).toBe(view);
+  });
+
+  it("counts nested sanityCheck/applyLoss and institutionalize/trigger as one semantic mutation each", () => {
+    const checked = new SanityEngine(60);
+    checked.sanityCheck("1/1", () => 0);
+    expect(checked.semanticRevision).toBe(1n);
+
+    const institutionalized = new SanityEngine(60);
+    institutionalized.institutionalize();
+    expect(institutionalized.state.irreversibleChanges).toHaveLength(1);
+    expect(institutionalized.semanticRevision).toBe(1n);
+  });
+
+  it("bumps once when a mutator throws after changing valid state", () => {
+    const engine = new SanityEngine(60);
+    expect(() => engine.applyLoss(5, () => 2)).toThrow();
+    expect(engine.state.currentSAN).toBe(55);
+    expect(engine.state.temporaryInsanity).toBe(true);
+    expect(engine.semanticRevision).toBe(1n);
+  });
+
+  it("keeps revision history when two changes restore the original content", () => {
+    const engine = new SanityEngine(60);
+    const original = structuredClone(engine.state);
+    engine.restoreState({ ...engine.state, currentSAN: 59 });
+    engine.restoreState(original);
+    expect(engine.state).toEqual(original);
+    expect(engine.semanticRevision).toBe(2n);
   });
 });
 

@@ -69,6 +69,9 @@ export function woundPenaltyOf(pcName: string): number {
 // actorKind: 这一掷是谁发起的。敌人还手也走 `check()`（`combat.ts` 的 `enemyAttack`），
 // 播报出来同样是「➜ 米戈 【格斗】」—— 从文本上分不出攻击者是敌是我，
 // 「敌人会不会还手」和「昏迷的人还在不在掷骰」两个判据都栽在这里。
+/** CoC 奖励/惩罚骰的有效枚数上限，供调用方合并环境条件时复用。 */
+export const MAX_PENALTY_DICE = 2;
+
 export function check(
   skillVal: number,
   pcName: string,
@@ -79,7 +82,7 @@ export function check(
   actorKind: ActorKind = "pc",
 ): CoCCheckResult {
   const fromWound = ignoreWound ? 0 : woundPenaltyOf(pcName);
-  const total = Math.min(2, penaltyDice + fromWound);
+  const total = Math.min(MAX_PENALTY_DICE, penaltyDice + fromWound);
   const r = CoCEngine.skillCheck(skillVal, diff, 0, total);
   const why = fromWound > 0 ? (penaltyDice > 0 ? "环境+伤势" : "伤势") : "";
   const penaltyNote = total > 0 ? ` [${total}惩罚骰${why ? "·" + why : ""}]` : "";

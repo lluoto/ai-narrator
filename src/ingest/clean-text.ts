@@ -15,6 +15,8 @@
 // 第 5 处是附录里的普通正文。两个分母都记在这里，免得照小的那个去审就漏了。
 
 import { evidenceSpan, sha256, type DocumentPage, type EvidenceRef, type EvidenceSpan } from "./document-ir";
+import { isCrossPageLabelContinuation, sectionTitleLines } from "./section-heading";
+import { detectTabularLayout, detectTabularLayouts, type TabularLayout } from "./tabular-layout";
 
 export interface TraceFragment {
   outputStart: number;
@@ -93,17 +95,6 @@ export function trimTracedText(trace: TracedText): TracedText {
   let end = trace.text.length;
   while (end > start && /\s/.test(trace.text[end - 1]!)) end--;
   return sliceTracedText(trace, start, end);
-}
-
-function rawLines(page: DocumentPage): Array<{ rawStart: number; rawEnd: number }> {
-  const lines: Array<{ rawStart: number; rawEnd: number }> = [];
-  let start = 0;
-  for (const match of page.rawText.matchAll(/\r?\n/g)) {
-    lines.push({ rawStart: start, rawEnd: match.index! });
-    start = match.index! + match[0].length;
-  }
-  lines.push({ rawStart: start, rawEnd: page.rawText.length });
-  return lines;
 }
 
 function normalizeLine(page: DocumentPage, rawStart: number, rawEnd: number): TracedText {
@@ -192,7 +183,7 @@ const ASCII_ELLIPSIS_END = /\.{2,}[」』"'”’）)】]*$/;
  * 默认接上——中文正文里，一行结束而没有终止标点，几乎总是被栏宽切断的。
  * 例外都是"这一行本身有结构含义"的情况。
  */
-function shouldJoin(prev: string, next: string): boolean {
+function shouldJoin(prev: string, next: string, nextLabelIsHeading = true): boolean {
   // 新条目另起
   if (ITEM_MARK.test(next)) return false;
   // 上一行话说完了
@@ -201,7 +192,7 @@ function shouldJoin(prev: string, next: string): boolean {
   if (LABEL_END.test(prev)) return false;
   // 下一行本身是个短标签（场景名之类），别被上一行吸走。
   // 场景名是下游切分的锚点，糊进正文就定位不到场景边界了。
-  if (LABEL_END.test(next) && next.length <= LABEL_MAX_LEN) return false;
+  if (LABEL_END.test(next) && next.length <= LABEL_MAX_LEN && nextLabelIsHeading) return false;
   return true;
 }
 
@@ -211,21 +202,21 @@ function shouldJoin(prev: string, next: string): boolean {
  * 幂等：清洗过的文本再洗一次结果不变。这条是有意保证的——
  * 管线里同一段文本可能被重复处理，不幂等就会越洗越短。
  */
-export function cleanPageText(raw: string): string {
+function cleanPageTextWithLayout(raw: string, layout: TabularLayout): string {
   if (!raw) return "";
 
   // 制表符与连续空格一律收成单个空格。
   // 不是直接删掉：`模组采用\tCOC7th\t规则` 删成 `模组采用COC7th规则` 反而更难读，
   // 中西文之间留一格是排版惯例。而 `1D4+1` 内部本来就没有空白，不受影响。
-  const spaced = raw.replace(/[ \t\u00a0\u3000]+/g, " ");
-
-  const lines = spaced.split(/\r?\n/).map((l) => l.trim());
+  const lines = layout.lines.map((line) => line.text);
+  const headings = sectionTitleLines(lines);
 
   const out: string[] = [];
   let prev: string | null = null;
   let sawBlank = false;
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
     if (line === "") {
       // 空行是段落分隔。连着几个也只算一个，且开头的空行不算。
       if (out.length > 0) sawBlank = true;
@@ -236,7 +227,13 @@ export function cleanPageText(raw: string): string {
       out.push(line);
     } else if (sawBlank) {
       out.push("\n\n" + line);
-    } else if (shouldJoin(prev as string, line)) {
+    } else if (headings[index - 1] !== undefined || headings[index] !== undefined) {
+      // Bare headings lack the colon that would otherwise protect both sides
+      // of their boundary from the normal wrapped-prose join.
+      out.push("\n" + line);
+    } else if (layout.lines[index - 1]?.structural || layout.lines[index]?.structural) {
+      out.push("\n" + line);
+    } else if (shouldJoin(prev as string, line, headings[index] !== undefined)) {
       out.push(line); // 直接续上，中文之间不加空格
     } else {
       out.push("\n" + line);
@@ -247,6 +244,16 @@ export function cleanPageText(raw: string): string {
   }
 
   return out.join("").trim();
+}
+
+export function cleanPageText(raw: string): string {
+  return cleanPageTextWithLayout(raw, detectTabularLayout(raw));
+}
+
+/** Clean raw pages with cross-page structural runs marked before page-local cleanup. */
+export function cleanPages(rawPages: readonly string[]): string[] {
+  const layouts = detectTabularLayouts(rawPages);
+  return rawPages.map((raw, index) => cleanPageTextWithLayout(raw, layouts[index]!));
 }
 
 /**
@@ -273,10 +280,25 @@ export function cleanPageText(raw: string): string {
  * 下游会当成一件事；漏接了只是少还原一处排版换行。两种错的代价不对等。
  */
 function shouldJoinAcrossPages(prevLast: string, curFirst: string): boolean {
-  if (!shouldJoin(prevLast, curFirst)) return false;
-  if (LABEL_END.test(curFirst)) return false;
+  const labelContinuation = isCrossPageLabelContinuation(prevLast, curFirst);
+  if (!shouldJoin(prevLast, curFirst, !labelContinuation)) return false;
+  if (LABEL_END.test(curFirst) && !labelContinuation) return false;
   if (ASCII_ELLIPSIS_END.test(prevLast)) return false;
   return true;
+}
+
+/**
+ * Page joining works on cleaned text, so run the same normalized-layout
+ * detector here rather than inventing a cross-page approximation. This keeps
+ * a structural first row from being consumed by unfinished prose on the prior
+ * page, whether the original PDF used tabs or not.
+ */
+function boundaryTouchesStructuralRow(previousPage: string, currentPage: string): boolean {
+  const boundary = previousPage.length;
+  const lines = detectTabularLayout(`${previousPage}\n${currentPage}`).lines;
+  const previousLast = lines.filter((line) => line.rawEnd <= boundary && line.text !== "").at(-1);
+  const currentFirst = lines.find((line) => line.rawStart > boundary && line.text !== "");
+  return previousLast?.structural === true || currentFirst?.structural === true;
 }
 
 /**
@@ -324,7 +346,7 @@ export function joinPages(pages: string[]): string[] {
       const prevLast = (prevLines[prevLines.length - 1] ?? "").trim();
       const curFirst = (curLines[0] ?? "").trim();
 
-      if (prevLast !== "" && curFirst !== "" && shouldJoinAcrossPages(prevLast, curFirst)) {
+      if (prevLast !== "" && curFirst !== "" && !boundaryTouchesStructuralRow(out[tail] as string, out[i] as string) && shouldJoinAcrossPages(prevLast, curFirst)) {
         prevLines[prevLines.length - 1] = prevLast + curFirst;
         out[tail] = prevLines.join("\n");
         // slice(1) 会在「被接走的那行后面原本跟着空行」时留下一个开头的换行。
@@ -345,15 +367,17 @@ export function joinPages(pages: string[]): string[] {
  * Trace-aware equivalent of cleanPageText. Its text output is intentionally
  * byte-for-byte equal to cleanPageText(page.rawText); only fragments are new.
  */
-export function cleanPageWithTrace(page: DocumentPage): TracedText {
+function cleanPageWithTraceLayout(page: DocumentPage, layout: TabularLayout): TracedText {
   if (!page.rawText) return { text: "", fragments: [] };
 
-  const lines = rawLines(page).map((line) => normalizeLine(page, line.rawStart, line.rawEnd));
+  const lines = layout.lines.map((line) => normalizeLine(page, line.rawStart, line.rawEnd));
+  const headings = sectionTitleLines(lines.map((line) => line.text));
   const builder = createTraceBuilder();
   let previous: string | null = null;
   let sawBlank = false;
 
-  for (const lineTrace of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const lineTrace = lines[index]!;
     const line = lineTrace.text;
     if (line === "") {
       if (builder.finish().text.length > 0) sawBlank = true;
@@ -364,7 +388,13 @@ export function cleanPageWithTrace(page: DocumentPage): TracedText {
     } else if (sawBlank) {
       builder.appendSynthetic("\n\n");
       builder.appendTrace(lineTrace);
-    } else if (shouldJoin(previous as string, line)) {
+    } else if (headings[index - 1] !== undefined || headings[index] !== undefined) {
+      builder.appendSynthetic("\n");
+      builder.appendTrace(lineTrace);
+    } else if (layout.lines[index - 1]?.structural || layout.lines[index]?.structural) {
+      builder.appendSynthetic("\n");
+      builder.appendTrace(lineTrace);
+    } else if (shouldJoin(previous as string, line, headings[index] !== undefined)) {
       builder.appendTrace(lineTrace);
     } else {
       builder.appendSynthetic("\n");
@@ -375,6 +405,16 @@ export function cleanPageWithTrace(page: DocumentPage): TracedText {
   }
 
   return trimTracedText(builder.finish());
+}
+
+export function cleanPageWithTrace(page: DocumentPage): TracedText {
+  return cleanPageWithTraceLayout(page, detectTabularLayout(page.rawText));
+}
+
+/** Trace-aware batch cleaning with exactly the same cross-page structural flags as cleanPages. */
+export function cleanPagesWithTrace(pages: readonly DocumentPage[]): TracedText[] {
+  const layouts = detectTabularLayouts(pages.map((page) => page.rawText));
+  return pages.map((page, index) => cleanPageWithTraceLayout(page, layouts[index]!));
 }
 
 /**
@@ -398,7 +438,7 @@ export function joinPagesWithTrace(pages: TracedText[]): TracedText[] {
       const previousText = previousLast.text.trim();
       const currentText = currentFirst.text.trim();
 
-      if (previousText !== "" && currentText !== "" && shouldJoinAcrossPages(previousText, currentText)) {
+      if (previousText !== "" && currentText !== "" && !boundaryTouchesStructuralRow(previous.text, current.text) && shouldJoinAcrossPages(previousText, currentText)) {
         const lastStart = previous.text.lastIndexOf("\n") + 1;
         out[tail] = concatTraces([
           sliceTracedText(previous, 0, lastStart),

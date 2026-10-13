@@ -17,6 +17,7 @@
 
 import { describe, it, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { InvestigationEngine } from "../investigation/investigation-engine";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
@@ -114,11 +115,11 @@ describe("「无副作用」三条断言：不烧运气、不算孤注一掷、�
     expect(s.activeCharacter.luck).toBe(luckBefore);
   });
 
-  it("直接调 investigateCoC 验证无副作用重试档的 pushed=false、luckSpent=0", async () => {
-    const s = await arenaAtTrailer(`ladder-pushed-${Math.random()}`);
-    for (let i = 0; i < 3; i++) s.world.incrementClueFail("clue_card"); // 推到 failCount=3（重试档）
-    const skills = s.activeCharacter.skillValues ?? s.activeCharacter.skills ?? {};
-    const r = s.investigation.investigateCoC("clue_card", skills, "p1");
+  it("独立引擎的无推骰检定返回 pushed=false、luckSpent=0", () => {
+    // GameSession 的 failback 顺序由上面的真实 act() 路径覆盖；这里保留
+    // InvestigationEngine 自己的 CoC 结果契约，不借公共 Session 读视图执行机制。
+    const engine = new InvestigationEngine();
+    const r = engine.investigateCoC("ritual_site", { occult: 1 }, "p1");
     expect(r.pushed).toBe(false);
     expect(r.luckSpent).toBe(0);
   });

@@ -21,6 +21,7 @@ import type { Cast, Cursor } from "../play/run-state";
 import type { CoCGeneratedCharacter } from "../character/coc-character";
 import type { ModuleData, Scene } from "../module/types";
 import type { WorldState } from "../world/state";
+import { createGameTime } from "../rules/game-time";
 
 const realRandom = Math.random;
 afterEach(() => { Math.random = realRandom; });
@@ -43,7 +44,7 @@ function cast(hp1: number, hp2: number): Cast {
 
 function cursor(): Cursor {
   return {
-    rounds: 1, stepCounter: 1, triggeredTraps: new Set(),
+    rounds: 1, gameTime: createGameTime(), stepCounter: 1, triggeredTraps: new Set(),
     visitCount: new Map(), done: false, arrivedByPlayerChoice: false,
   };
 }

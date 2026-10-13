@@ -28,16 +28,18 @@ import type { MythosCreature } from "./mythos-expansion";
 import { MYTHOS_CREATURES } from "./mythos-expansion";
 // 与 WorldStateManager 读 exits 用的是**同一份**解析（见该文件顶部说明）
 import { parseExits, mergeExits } from "../state/scene-exits";
-import type {
-  RuntimeClueBinding,
-  RuntimeInitialEffect,
-  RuntimeItemPlacement,
-  RuntimeModuleEnding,
-  RuntimeModuleHook,
-  RuntimeModuleReward,
-  RuntimeModuleSpell,
-  RuntimeModuleTome,
-  RuntimeNpcConfig,
+import {
+  normalizeRuntimeModulePickupOrigins,
+  normalizeRuntimeModuleTomes,
+  type RuntimeClueBinding,
+  type RuntimeInitialEffect,
+  type RuntimeItemPlacement,
+  type RuntimeModuleEnding,
+  type RuntimeModuleHook,
+  type RuntimeModuleReward,
+  type RuntimeModuleSpell,
+  type RuntimeModuleTome,
+  type RuntimeNpcConfig,
 } from "../module/runtime-types";
 
 // ============================================================
@@ -157,14 +159,98 @@ export interface MythosModule {
   kpNotes?: Record<string, string>;
 }
 
+function isMythosModuleRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isMythosModuleText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function mythosModuleEntries(module: Record<string, unknown>, key: string): unknown[] {
+  const value = module[key];
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * Pure preflight shared by the session package boundary and this legacy
+ * representation. It deliberately validates only loader-consumed structure;
+ * it does not change MythosModuleLoader's historical write atomicity.
+ */
+export function assertMythosModuleForInstall(value: unknown): asserts value is MythosModule {
+  if (!isMythosModuleRecord(value)) throw new Error("MythosModule must be an object");
+  for (const key of ["id", "name", "version"]) {
+    if (!isMythosModuleText(value[key])) throw new Error(`MythosModule ${key} must be non-blank text`);
+  }
+  if (typeof value.description !== "string") throw new Error("MythosModule description must be text");
+  if (!(["easy", "medium", "hard", "nightmare"] as string[]).includes(value.difficulty as string)) throw new Error("MythosModule difficulty is invalid");
+  if (!isMythosModuleRecord(value.activation)
+    || !(["manual", "location_enter", "item_found", "read_tome", "san_threshold"] as string[]).includes(value.activation.type as string)
+    || typeof value.activation.condition !== "string") throw new Error("MythosModule activation is invalid");
+  for (const key of ["spells", "tomes", "items", "npcs", "clues", "hooks", "endings", "rewards", "initialEffects"]) {
+    if (value[key] !== undefined && !Array.isArray(value[key])) throw new Error(`MythosModule ${key} must be an array`);
+  }
+  for (const key of ["sceneDescriptions", "sceneBgm", "sceneAliases", "kpNotes", "exits"]) {
+    if (value[key] !== undefined && !isMythosModuleRecord(value[key])) throw new Error(`MythosModule ${key} must be an object`);
+  }
+  for (const [sceneId, exits] of Object.entries(value.exits ?? {})) {
+    if (!isMythosModuleText(sceneId) || !Array.isArray(exits) || exits.some((exit) => !isMythosModuleRecord(exit) || !isMythosModuleText(exit.target))) {
+      throw new Error("MythosModule exits contain an invalid entry");
+    }
+  }
+  for (const [mapName, map] of [["sceneDescriptions", value.sceneDescriptions], ["sceneBgm", value.sceneBgm], ["kpNotes", value.kpNotes]] as const) {
+    if (map !== undefined && (!isMythosModuleRecord(map) || Object.values(map).some((entry) => !isMythosModuleText(entry)))) throw new Error(`MythosModule ${mapName} contains an invalid entry`);
+  }
+  if (value.sceneAliases !== undefined && (!isMythosModuleRecord(value.sceneAliases) || Object.values(value.sceneAliases).some((aliases) => !Array.isArray(aliases) || aliases.some((alias) => !isMythosModuleText(alias))))) {
+    throw new Error("MythosModule sceneAliases contains an invalid entry");
+  }
+  for (const spell of mythosModuleEntries(value, "spells")) {
+    if (!isMythosModuleRecord(spell) || !isMythosModuleText(spell.name) || !isMythosModuleText(spell.sanCost) || typeof spell.mpCost !== "number" || !isMythosModuleText(spell.description)) {
+      throw new Error("MythosModule spells contain an invalid entry");
+    }
+  }
+  normalizeRuntimeModuleTomes(value.tomes);
+  normalizeRuntimeModulePickupOrigins({ tomes: value.tomes, itemPlacements: value.items });
+  for (const item of mythosModuleEntries(value, "items")) {
+    if (!isMythosModuleRecord(item) || !isMythosModuleText(item.name) || !isMythosModuleText(item.sceneId)) throw new Error("MythosModule items contain an invalid entry");
+  }
+  for (const npc of mythosModuleEntries(value, "npcs")) {
+    if (!isMythosModuleRecord(npc) || !isMythosModuleText(npc.id) || !isMythosModuleText(npc.name)
+      || !["npc", "monster"].includes(npc.type as string) || typeof npc.hp !== "number" || typeof npc.maxHp !== "number"
+      || typeof npc.ac !== "number" || !isMythosModuleText(npc.faction) || !isMythosModuleText(npc.sceneId)) {
+      throw new Error("MythosModule npcs contain an invalid entry");
+    }
+  }
+  for (const clue of mythosModuleEntries(value, "clues")) {
+    if (!isMythosModuleRecord(clue) || !isMythosModuleText(clue.scene) || !isMythosModuleText(clue.clueType)) throw new Error("MythosModule clues contain an invalid entry");
+  }
+  for (const hook of mythosModuleEntries(value, "hooks")) {
+    if (!isMythosModuleRecord(hook) || !["on_enter_scene", "on_combat_start", "on_read_tome", "on_investigate"].includes(hook.type as string) || !isMythosModuleText(hook.condition)) {
+      throw new Error("MythosModule hooks contain an invalid entry");
+    }
+  }
+  for (const ending of mythosModuleEntries(value, "endings")) {
+    if (!isMythosModuleRecord(ending) || !isMythosModuleText(ending.id) || !isMythosModuleText(ending.name) || !isMythosModuleText(ending.description) || !isMythosModuleText(ending.conditionText)) {
+      throw new Error("MythosModule endings contain an invalid entry");
+    }
+  }
+  for (const reward of mythosModuleEntries(value, "rewards")) {
+    if (!isMythosModuleRecord(reward) || !isMythosModuleText(reward.id) || !isMythosModuleText(reward.description) || !isMythosModuleText(reward.conditionText)) {
+      throw new Error("MythosModule rewards contain an invalid entry");
+    }
+  }
+}
+
 // ============================================================
 // 加载器
 // ============================================================
 
 /** 模组加载器需要的外部接口 — 最小依赖集合 */
 export interface MythosModuleHost {
-  mythosSpells: Map<string, { sanCost: string; mpCost: number; description: string; effect?: string }>;
-  knownMythosSpells: string[];
+  /** Registers one canonical spell definition. Returns false when it already exists. */
+  registerSpell(spell: ModuleSpell): boolean;
+  /** Registers one source-declared tome through session-owned provenance authority. */
+  registerTome(tome: ModuleTome): void;
   sceneItems: Map<string, string[]>;
   /** 物品描述映射（物品名 → 描述文本），与 sceneItems 共用物品名索引 */
   itemDescriptions: Map<string, string>;
@@ -327,14 +413,18 @@ export class MythosModuleLoader {
    * @returns 导入结果描述
    */
   import(module: MythosModule): string[] {
+    // Keep direct legacy use behind the same pure preflight as GameSession's
+    // RuntimeModulePackage dispatcher. This does not make later host writes
+    // atomic; it only rejects malformed input before imported.add()/host I/O.
+    assertMythosModuleForInstall(module);
     const lines: string[] = [];
+    const tomes = normalizeRuntimeModuleTomes(module.tomes);
 
     if (this.imported.has(module.id)) {
       lines.push(`模组「${module.name}」已导入，跳过。`);
       return lines;
     }
 
-    this.imported.add(module.id);
     lines.push(`【剧本杀模组：${module.name}】`);
     lines.push(`难度：${module.difficulty} | ${module.description}`);
 
@@ -431,6 +521,9 @@ export class MythosModuleLoader {
         }
       }
     } catch (e: any) {
+      // A scene-exit database failure follows earlier legacy writes. It must
+      // reach the session boundary so that the candidate is fail-stopped.
+      if (this.host.world.getDatabase) throw e;
       lines.push(`⚠️ 场景出口连接失败: ${e.message}`);
     }
 
@@ -438,29 +531,17 @@ export class MythosModuleLoader {
     let spellCount = 0;
     if (module.spells) {
       for (const s of module.spells) {
-        if (!this.host.mythosSpells.has(s.name)) {
-          this.host.mythosSpells.set(s.name, {
-            sanCost: s.sanCost,
-            mpCost: s.mpCost,
-            description: s.description,
-            effect: s.effectType,
-          });
-          spellCount++;
-        }
+        if (this.host.registerSpell(s)) spellCount++;
       }
     }
     if (spellCount > 0) lines.push(`注册 ${spellCount} 个神话法术`);
 
     // 2. 放置典籍
     let tomeCount = 0;
-    if (module.tomes) {
-      for (const t of module.tomes) {
-        const items = this.host.sceneItems.get(t.sceneId) ?? [];
-        if (!items.includes(t.name)) {
-          items.push(t.name);
-          this.host.sceneItems.set(t.sceneId, items);
-          tomeCount++;
-        }
+    if (tomes.length > 0) {
+      for (const t of tomes) {
+        this.host.registerTome(t);
+        tomeCount++;
       }
     }
     if (tomeCount > 0) lines.push(`放置 ${tomeCount} 本典籍`);
@@ -483,36 +564,21 @@ export class MythosModuleLoader {
     }
     if (itemCount > 0) lines.push(`放置 ${itemCount} 件物品`);
 
-    // 4. 生成 NPC/生物（支持引用 mythos-expansion 的生物属性）
+    // 4. 生成 NPC/生物。ModuleNPC 的数值字段是模组明确的遭遇事实；
+    //    `mythosCreatureId` 只是关联通用目录的身份，不能反过来覆盖模组 HP/AC。
     let npcCount = 0;
     if (module.npcs) {
       for (const n of module.npcs) {
-        // 如果指定了 mythosCreatureId，用生物属性覆盖基础值
-        let entityHp = n.hp;
-        let entityMaxHp = n.maxHp;
-        let entityAc = n.ac;
-        let entityFaction = n.faction;
-
-        if (n.mythosCreatureId) {
-          const creatureStats = MYTHOS_CREATURE_BY_ID.get(n.mythosCreatureId) ?? MYTHOS_CREATURE_MAP.get(n.mythosCreatureId);
-          if (creatureStats) {
-            entityHp = creatureStats.hp;
-            entityMaxHp = creatureStats.maxHp;
-            entityAc = creatureStats.ac;
-            entityFaction = entityFaction === "神话生物" ? creatureStats.name : entityFaction;
-          }
-        }
-
         this.host.world.upsertEntity({
           id: n.id,
           name: n.name,
           type: n.type,
-          hp: entityHp,
-          maxHp: entityMaxHp,
-          ac: entityAc,
+          hp: n.hp,
+          maxHp: n.maxHp,
+          ac: n.ac,
           status: [],
           position: n.sceneId,
-          faction: entityFaction,
+          faction: n.faction,
           scene_id: n.sceneId,
           attributes: n.attributes ?? {},
           skills: n.skills ?? {},
@@ -534,7 +600,7 @@ export class MythosModuleLoader {
         npcCount++;
       }
     }
-    if (npcCount > 0) lines.push(`生成 ${npcCount} 个 NPC/生物（含 mythos 属性同步）`);
+    if (npcCount > 0) lines.push(`生成 ${npcCount} 个 NPC/生物`);
 
     // 5. 场景调查线索注册
     let clueCount = 0;
@@ -600,6 +666,9 @@ export class MythosModuleLoader {
 
     this.host.addMessage("系统", `剧本杀模组「${module.name}」已加载`, "system");
 
+    // This is the commit point: no retry may observe an imported module until
+    // every legacy-host write and narration has completed successfully.
+    this.imported.add(module.id);
     return lines;
   }
 

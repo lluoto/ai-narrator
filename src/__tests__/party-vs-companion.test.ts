@@ -21,12 +21,13 @@ const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 64, temperature: 0,
 };
+const TRANSIENT_RUNTIME = { careerEntryPersistence: "transient" as const };
 
 const textOf = (r: { events: { content: unknown }[] }) =>
   r.events.map((e) => String(e.content)).join("\n");
 
 async function withTeammate() {
-  const s = new GameSession(`pt-${Math.random()}`, "cosmic-horror", CFG);
+  const s = new GameSession(`pt-${Math.random()}`, "cosmic-horror", CFG, undefined, undefined, undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME);
   await s.act("创建角色 investigator 甲");
   const joined = textOf(await s.act("创建队友 乙 investigator"));
   return { s, joined };

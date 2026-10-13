@@ -9,7 +9,7 @@
 import type { ModuleData, Scene, ModuleSupport } from "../module/types";
 import type { WorldState } from "../world/state";
 import { CoCEngine, SUCCESS_LEVEL_LABELS, rollHitLocation } from "../rules/coc-engine";
-import { say, sayMech, emit } from "./narration";
+import { runCtx, say, sayMech, emit } from "./narration";
 import { sanCheck, check, applyDamage, woundPenaltyOf } from "./checks";
 import { needsMajorWoundCheck, getDisability } from "../combat/wound-effects";
 import { activeHooks } from "./ruleset";
@@ -17,7 +17,7 @@ import { runChase, environmentFromScene } from "./chase";
 import { rollDice } from "./trap-util";
 import { isDowned } from "./run-state";
 import type { Cast } from "./run-state";
-import { generateNarrative } from "../llm/narrator";
+import { generateNarrativeWithLLM } from "../llm/narrator";
 
 /**
  * Boss 遭遇战（本模组是 Mi-Go）。条件不满足就直接返回，不产生任何播报。
@@ -200,7 +200,7 @@ if (migoEncounter) {
       if (r.successLevel === "critical") dmg += dieMax;
       else if (r.successLevel === "extreme") dmg += Math.floor(dieMax / 2);
       const willKill = migoHp - dmg <= 0;
-      const narrative = await generateNarrative(
+      const narrative = await generateNarrativeWithLLM(runCtx.getStore()?.llmClient ?? null,
         name, enemyName, usingGun ? "左轮手枪" : "拳头",
         { hit: true, crit: r.successLevel === "critical", damage: dmg, result: willKill ? "kill" : "wound" },
         migoMaxHp,
@@ -209,7 +209,7 @@ if (migoEncounter) {
       emit({ type: "pc-attack", actor: name, skill: skillLabel, success: true, damage: dmg });
       return dmg;
     } else {
-      const narrative = await generateNarrative(
+      const narrative = await generateNarrativeWithLLM(runCtx.getStore()?.llmClient ?? null,
         name, enemyName, usingGun ? "左轮手枪" : "拳头",
         { hit: false, damage: 0, result: "miss" },
         migoMaxHp,
@@ -257,7 +257,7 @@ if (migoEncounter) {
 
     const dmg = rollDice(enemyStats.damage);
     emit({ type: "enemy-attack", enemy: enemyName, target: name, outcome: "hit", damage: dmg });
-    const narrative = await generateNarrative(
+    const narrative = await generateNarrativeWithLLM(runCtx.getStore()?.llmClient ?? null,
       enemyName, name, enemyWeapon,
       { hit: true, crit: atk.successLevel === "critical", damage: dmg, result: "wound" },
       pc.maxHp,

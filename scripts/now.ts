@@ -9,7 +9,8 @@
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { spawnSync } from "child_process";
-import { judgeProcess, parseTestOutput, judgeTestCount } from "../src/diagnostics/source-scan";
+import { boundedBunFailureDiagnostics, judgeProcess, type TestBaseline } from "../src/diagnostics/source-scan";
+import { collectTestRunEvidence } from "../src/diagnostics/test-run-evidence";
 
 const noTest = process.argv.includes("--no-test");
 function sh(label: string, cmd: string, args: string[]): string {
@@ -22,31 +23,269 @@ function sh(label: string, cmd: string, args: string[]): string {
 const branch = sh("git branch", "git", ["rev-parse", "--abbrev-ref", "HEAD"]);
 const head = sh("git head", "git", ["log", "--oneline", "-1"]);
 const dirty = sh("git status", "git", ["status", "--short"]).split("\n").filter(Boolean);
+const untrackedTestStatus = dirty.filter((entry) =>
+  entry.startsWith("?? ") && /(?:^|[\\/])[^\\/]+\.test\.[^\\/]+$/.test(entry.trim()),
+);
+const visibleDirty = dirty.filter((entry) => !untrackedTestStatus.includes(entry));
 const recent = sh("git history", "git", ["log", "--oneline", "-8"]).split("\n").filter(Boolean);
 
 let testLine = "（本次未跑）";
+let testFailureDiagnostics: string[] = [];
 if (!noTest) {
-  const t = spawnSync("bun", ["test"], { encoding: "utf8" });
-  const verdict = judgeProcess("bun test", t);
-  const count = parseTestOutput((t.stdout ?? "") + "\n" + (t.stderr ?? ""));
   const baseline = existsSync("docs/test-baseline.json")
-    ? JSON.parse(readFileSync("docs/test-baseline.json", "utf8"))
-    : undefined;
-  const summary = baseline
-    ? judgeTestCount(count, baseline)
-    : { problems: ["缺少测试基线 docs/test-baseline.json —— 不能当成通过"], notes: [] };
-  testLine = !verdict.ok
-    ? `（测试未通过：${verdict.reason}）`
-    : summary.problems.length
-      ? `（测试未通过：${summary.problems.join("；")}）`
-      : `${count.tests} 条 / ${count.files} 文件  全绿`;
+    ? (JSON.parse(readFileSync("docs/test-baseline.json", "utf8")) as TestBaseline)
+    : null;
+  // Drain both streams until Bun emits its terminal summary; spawnSync's
+  // fixed capture buffer can otherwise truncate a healthy full suite.
+  const evidence = await collectTestRunEvidence(
+    "bun",
+    ["test", "--parallel=1", "--timeout", "30000"],
+    baseline ?? { tests: 0, files: 0 },
+  );
+  if (!evidence.ok) testFailureDiagnostics = boundedBunFailureDiagnostics(evidence.output);
+  testLine = !evidence.ok
+    ? `（测试未通过：${evidence.reason}）`
+    : !baseline
+      ? "（测试未通过：缺少测试基线 docs/test-baseline.json —— 不能当成通过）"
+      : `${evidence.count.tests} 条 / ${evidence.count.files} 文件  全绿`;
 }
 
 // 待办：从 todo.json 取 warn 级
+type CurrentWorkItem = {
+  id?: unknown;
+  severity?: unknown;
+  latestText?: unknown;
+  text?: unknown;
+  latestPlayerIntentProgress?: unknown;
+  npcRuntimeTransitionAtomicityClosure?: unknown;
+  npcRuntimeTransitionAtomicityVerification?: unknown;
+  npcRuntimeTransitionAtomicityOpenScope?: unknown;
+  npcCliFanoutAtomicityClosure?: unknown;
+  npcCliFanoutAtomicityVerification?: unknown;
+  npcCliFanoutAtomicityOpenScope?: unknown;
+  npcMemoryAppendAtomicityClosure?: unknown;
+  npcMemoryAppendAtomicityVerification?: unknown;
+  npcMemoryAppendAtomicityOpenScope?: unknown;
+  npcAgentPrivateMemoryStateDispatchClosure?: unknown;
+  npcAgentPrivateMemoryStateDispatchVerification?: unknown;
+  npcAgentPrivateMemoryStateDispatchOpenScope?: unknown;
+  careerLeafLockDeadOwnerRecoveryClosure?: unknown;
+  careerLeafLockDeadOwnerRecoveryVerification?: unknown;
+  careerLeafLockDeadOwnerRecoveryOpenScope?: unknown;
+  gameSessionSetSceneWriterRetirementClosure?: unknown;
+  gameSessionSetSceneWriterRetirementVerification?: unknown;
+  gameSessionSetSceneWriterRetirementOpenScope?: unknown;
+  gameSessionWorldFacadeLifecycleClosure?: unknown;
+  gameSessionWorldFacadeLifecycleVerification?: unknown;
+  gameSessionWorldFacadeLifecycleOpenScope?: unknown;
+  gameSessionClosedLifecycleMutatorGuardClosure?: unknown;
+  gameSessionClosedLifecycleMutatorGuardVerification?: unknown;
+  gameSessionClosedLifecycleMutatorGuardOpenScope?: unknown;
+  playerSessionVisibleToWriterRetirementClosure?: unknown;
+  playerSessionVisibleToWriterRetirementVerification?: unknown;
+  playerSessionVisibleToWriterRetirementOpenScope?: unknown;
+  legacyWorldStateReadOwnershipClosure?: unknown;
+  legacyWorldStateReadOwnershipVerification?: unknown;
+  legacyWorldStateReadOwnershipFinalVerification?: unknown;
+  legacyWorldStateReadOwnershipOpenScope?: unknown;
+  worldDurableCurrentRoundSnapshotAtomicityClosure?: unknown;
+  worldDurableCurrentRoundSnapshotAtomicityVerification?: unknown;
+  worldDurableCurrentRoundSnapshotAtomicityFinalVerification?: unknown;
+  worldDurableCurrentRoundSnapshotAtomicityOpenScope?: unknown;
+  openingLifecycleDockerAndBindingCurrentScope?: unknown;
+  compilerAutoAdmissionStartupClosure?: unknown;
+  compilerAutoAdmissionStartupVerification?: unknown;
+  compilerAutoAdmissionStartupOpenScope?: unknown;
+  pdfPrepareIngressAdmissionClosure?: unknown;
+  pdfPrepareIngressAdmissionVerification?: unknown;
+  pdfPrepareIngressAdmissionOpenScope?: unknown;
+  compiledSessionCreationIngressClosure?: unknown;
+  compiledSessionCreationIngressVerification?: unknown;
+  compiledSessionCreationIngressOpenScope?: unknown;
+  nowAsyncDrainClosure?: unknown;
+  nowAsyncDrainVerification?: unknown;
+  nowAsyncDrainFinalVerification?: unknown;
+  nowAsyncDrainOpenScope?: unknown;
+  worldSingleActiveSceneInvariantClosure?: unknown;
+  worldSingleActiveSceneInvariantVerification?: unknown;
+  worldSingleActiveSceneInvariantFinalVerification?: unknown;
+  worldSingleActiveSceneInvariantOpenScope?: unknown;
+  worldRelationshipReverseFirstCreateClosure?: unknown;
+  worldRelationshipReverseFirstCreateVerification?: unknown;
+  worldRelationshipReverseFirstCreateFinalVerification?: unknown;
+  worldRelationshipReverseFirstCreateOpenScope?: unknown;
+  compilerJsonIngressAdmissionClosure?: unknown;
+  compilerJsonIngressAdmissionVerification?: unknown;
+  compilerJsonIngressAdmissionOpenScope?: unknown;
+  compiledWorldBindingProductionRegistryClosure?: unknown;
+  compiledWorldBindingProductionRegistryVerification?: unknown;
+  compiledWorldBindingProductionRegistryOpenScope?: unknown;
+  dockerExternalWorldModelMountClosure?: unknown;
+  dockerExternalWorldModelMountVerification?: unknown;
+  dockerExternalWorldModelMountOpenScope?: unknown;
+  openingAdmissionLifecycleOpenScope?: unknown;
+  gameSessionCreatePartyMemberPrivateAuthorityClosure?: unknown;
+  gameSessionCreatePartyMemberPrivateAuthorityVerification?: unknown;
+  gameSessionCreatePartyMemberPrivateAuthorityOpenScope?: unknown;
+  careerHelperRuntimePrivateAuthorityClosure?: unknown;
+  careerHelperRuntimePrivateAuthorityVerification?: unknown;
+  careerHelperRuntimePrivateAuthorityOpenScope?: unknown;
+  preflightAsyncDrainClosure?: unknown;
+  preflightAsyncDrainVerification?: unknown;
+  preflightAsyncDrainOpenScope?: unknown;
+  gameSessionConstructorInstallerPrivateAuthorityProgress?: unknown;
+  gameSessionConstructorInstallerPrivateAuthorityVerification?: unknown;
+  gameSessionConstructorInstallerPrivateAuthorityOpenScope?: unknown;
+  ordinaryOperatorRecoveryClosure?: unknown;
+  ordinaryOperatorRecoveryVerification?: unknown;
+  ordinaryOperatorRecoveryOpenScope?: unknown;
+  compiledActionRuntimePrivateCanonicalCohortClosure?: unknown;
+  compiledActionRuntimePrivateCanonicalCohortVerification?: unknown;
+  compiledActionRuntimePrivateCanonicalCohortOpenScope?: unknown;
+  ordinarySnapshotReplayDirectoryNodeOccupancyClosure?: unknown;
+  ordinarySnapshotReplayDirectoryNodeOccupancyVerification?: unknown;
+  ordinarySnapshotReplayDirectoryNodeOccupancyOpenScope?: unknown;
+  compiledActionRuntimePrivateLoadInstallAuthorityClosure?: unknown;
+  compiledActionRuntimePrivateLoadInstallAuthorityVerification?: unknown;
+  compiledActionRuntimePrivateLoadInstallAuthorityOpenScope?: unknown;
+  compilerAutoHintProposalSingleAttemptClosure?: unknown;
+  compilerAutoHintProposalSingleAttemptVerification?: unknown;
+  compilerAutoHintProposalSingleAttemptOpenScope?: unknown;
+  ordinaryDurableProviderSingleAttemptClosure?: unknown;
+  ordinaryDurableProviderSingleAttemptVerification?: unknown;
+  ordinaryDurableProviderSingleAttemptOpenScope?: unknown;
+  legacyOrdinaryRuntimeInstallPrivateAuthorityClosure?: unknown;
+  legacyOrdinaryRuntimeInstallPrivateAuthorityVerification?: unknown;
+  legacyOrdinaryRuntimeInstallPrivateAuthorityOpenScope?: unknown;
+  [field: string]: unknown;
+};
+
 let warns: string[] = [];
+let currentProductionQuality = "";
 if (existsSync("docs/todo.json")) {
   const todo = JSON.parse(readFileSync("docs/todo.json", "utf8"));
-  warns = todo.items.filter((i: any) => i.severity === "warn").map((i: any) => i.text);
+  const items = todo.items as CurrentWorkItem[];
+  const current = items.find((i) => i.id === "todo-64");
+  const admission = items.find((i) => i.id === "todo-65");
+  const newestClosures = [
+    admission?.npcRuntimeTransitionAtomicityClosure,
+    admission?.npcCliFanoutAtomicityClosure,
+    admission?.npcMemoryAppendAtomicityClosure,
+    admission?.npcAgentPrivateMemoryStateDispatchClosure,
+    admission?.careerLeafLockDeadOwnerRecoveryClosure,
+    admission?.gameSessionSetSceneWriterRetirementClosure,
+    admission?.gameSessionWorldFacadeLifecycleClosure,
+    admission?.gameSessionClosedLifecycleMutatorGuardClosure,
+    admission?.playerSessionVisibleToWriterRetirementClosure,
+    admission?.legacyWorldStateReadOwnershipClosure,
+    admission?.worldDurableCurrentRoundSnapshotAtomicityClosure,
+    admission?.nowAsyncDrainClosure,
+    admission?.worldSingleActiveSceneInvariantClosure,
+    admission?.worldRelationshipReverseFirstCreateClosure,
+    current?.compiledSessionCreationIngressClosure,
+    current?.compilerJsonIngressAdmissionClosure,
+    current?.pdfPrepareIngressAdmissionClosure,
+    current?.compilerAutoAdmissionStartupClosure,
+    current?.dockerExternalWorldModelMountClosure,
+    current?.compiledWorldBindingProductionRegistryClosure,
+    admission?.legacyOrdinaryRuntimeInstallPrivateAuthorityClosure,
+    admission?.ordinaryDurableProviderSingleAttemptClosure,
+    admission?.compiledActionRuntimePrivateLoadInstallAuthorityClosure,
+    admission?.compilerAutoHintProposalSingleAttemptClosure,
+    admission?.compiledActionRuntimePrivateCanonicalCohortClosure,
+    admission?.ordinarySnapshotReplayDirectoryNodeOccupancyClosure,
+    admission?.gameSessionConstructorInstallerPrivateAuthorityProgress,
+    admission?.preflightAsyncDrainClosure,
+    admission?.careerHelperRuntimePrivateAuthorityClosure,
+    admission?.gameSessionCreatePartyMemberPrivateAuthorityClosure,
+    admission?.gameSessionCreatePartyMemberPrivateAuthorityOpenScope,
+    admission?.ordinaryOperatorRecoveryClosure,
+    current?.openingLifecycleDockerAndBindingCurrentScope,
+    current?.sceneEnvironmentAtomicityClosure,
+    current?.entityUpsertAtomicityClosure,
+    current?.incrementClueFailAtomicityClosure,
+    current?.tickEffectsAtomicityClosure,
+    current?.applyDamageAtomicityClosure,
+    current?.preflightReliabilityClosure,
+    current?.activeSceneAtomicityClosure,
+    current?.ordinaryFirstAcquireRaceClosure,
+    current?.gameSessionPublicViewIsolationClosure,
+    current?.worldModelPromptStructuredValueClosure,
+    current?.sharedWorldModelIsolationClosure,
+    current?.barnCrossPageAtomClosure,
+    current?.ordinarySnapshotBuildDomainClosure,
+    current?.compiledIntentAdmissionContentionClosure,
+    current?.ordinaryHpTruthAndBoundaryAuditClosure,
+    current?.twoRealModuleAndScopedWorldModelProgress,
+    current?.freshRuntimeAndWorldAvailabilityClosure,
+    current?.fuzuCurrentSchemaAcceptanceClosure,
+    current?.diagnosticIntentApiProgress,
+    current?.controlStatePruningClosure,
+    current?.ordinaryProseFactFindingClosure,
+    current?.compiledSessionSnapshotQuotaGcClosure,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  currentProductionQuality = newestClosures.length
+    ? newestClosures.map((value) => value.trim()).join("\n\n")
+    : typeof current?.compiledSessionSnapshotCasClosure === "string"
+    ? current.compiledSessionSnapshotCasClosure.trim()
+    : typeof current?.catalogCrossProcessQuotaClosure === "string"
+    ? current.catalogCrossProcessQuotaClosure.trim()
+    : typeof current?.catalogDurablePublicationClosure === "string"
+    ? current.catalogDurablePublicationClosure.trim()
+    : typeof current?.automaticSourceExactNpcEncounterClosure === "string"
+    ? current.automaticSourceExactNpcEncounterClosure.trim()
+    : typeof current?.fuzuTrackedReviewFixtureClosure === "string"
+    ? current.fuzuTrackedReviewFixtureClosure.trim()
+    : typeof current?.actorEffectEventSlotClosure === "string"
+    ? current.actorEffectEventSlotClosure.trim()
+    : typeof current?.filmSanityOpeningClosure === "string"
+    ? current.filmSanityOpeningClosure.trim()
+    : typeof current?.latestSourceRuntimeQualityProgress === "string"
+      ? current.latestSourceRuntimeQualityProgress.trim()
+      : "";
+  warns = items
+    .filter((i) => i.severity === "warn")
+    .flatMap((i) => {
+      if (i.id === "todo-65") {
+        // Keep the explicit priority list itemized: the rendered warn bullets
+        // are individually bounded, so one newer scope cannot truncate an
+        // older allowlisted scope out of the snapshot.
+        return [
+          i.npcRuntimeTransitionAtomicityOpenScope,
+          i.npcCliFanoutAtomicityOpenScope,
+          i.npcMemoryAppendAtomicityOpenScope,
+          i.npcAgentPrivateMemoryStateDispatchOpenScope,
+          i.careerLeafLockDeadOwnerRecoveryOpenScope,
+          i.gameSessionSetSceneWriterRetirementOpenScope,
+          i.gameSessionWorldFacadeLifecycleOpenScope,
+          i.gameSessionClosedLifecycleMutatorGuardOpenScope,
+          i.playerSessionVisibleToWriterRetirementOpenScope,
+          i.legacyWorldStateReadOwnershipOpenScope,
+          i.worldDurableCurrentRoundSnapshotAtomicityOpenScope,
+          i.nowAsyncDrainOpenScope,
+          i.worldSingleActiveSceneInvariantOpenScope,
+          i.worldRelationshipReverseFirstCreateOpenScope,
+          i.legacyOrdinaryRuntimeInstallPrivateAuthorityOpenScope,
+          i.ordinaryDurableProviderSingleAttemptOpenScope,
+          i.compiledActionRuntimePrivateLoadInstallAuthorityOpenScope,
+          i.compilerAutoHintProposalSingleAttemptOpenScope,
+          i.compiledActionRuntimePrivateCanonicalCohortOpenScope,
+          i.ordinarySnapshotReplayDirectoryNodeOccupancyOpenScope,
+          i.gameSessionConstructorInstallerPrivateAuthorityOpenScope,
+          i.preflightAsyncDrainOpenScope,
+          i.careerHelperRuntimePrivateAuthorityOpenScope,
+          i.gameSessionCreatePartyMemberPrivateAuthorityOpenScope,
+          i.ordinaryOperatorRecoveryOpenScope,
+          i.openingAdmissionLifecycleOpenScope,
+          i.latestText,
+          i.text,
+        ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+      }
+      const value = i.id === "todo-64"
+        ? currentProductionQuality || i.latestPlayerIntentProgress
+        : i.latestText ?? i.text;
+      return typeof value === "string" ? [value] : [];
+    });
 }
 
 // log 里状态为 open 的记录 = 已定位未修
@@ -76,7 +315,7 @@ const md = `# 现在在哪
 | HEAD | ${head} |
 | 测试 | ${testLine} |
 | 工作树 | ${dirty.length === 0 ? "干净" : `**${dirty.length} 个文件未提交**`} |
-${dirty.length ? "\n未提交：\n" + dirty.map((d) => "- `" + d.trim() + "`").join("\n") + "\n" : ""}
+${visibleDirty.length ? "\n未提交：\n" + visibleDirty.map((d) => "- `" + d.trim() + "`").join("\n") + "\n" : ""}${untrackedTestStatus.length ? `\n未跟踪测试：${untrackedTestStatus.length} 个（路径不在状态页枚举；用 \`git status --short\` 查看）\n` : ""}
 ## 开工前
 
 \`\`\`
@@ -84,13 +323,17 @@ bun scripts/preflight.ts     # 改动前后各跑一次，机器判据挡住反�
 bun scripts/now.ts           # 收工前刷新这份文件
 \`\`\`
 
-## 已定位未修（${open.length}）
+${currentProductionQuality ? `## 当前来源→运行质量收口
+
+${currentProductionQuality}
+
+` : ""}## 已定位未修（${open.length}）
 
 ${open.length ? open.map((o) => `- ${o.title}\n  \`${o.file}:${o.line}\``).join("\n") : "（无）"}
 
 ## 动手前先扫一眼的坑（${warns.length}）
 
-${warns.map((w) => "- " + w.replace(/\n/g, " ").slice(0, 150)).join("\n")}
+${warns.map((w) => "- " + w.replace(/\n/g, " ").slice(0, 150).trimEnd()).join("\n")}
 
 ## 最近提交
 
@@ -112,3 +355,7 @@ PowerShell 会退回 ANSI 码页，中文全成乱码。用 Read/Grep 工具或 
 // Exit success means the snapshot was written, not that its test child passed.
 writeFileSync("docs/now.md", md, "utf8");
 console.log(`docs/now.md 已刷新 —— ${branch} / ${testLine} / 未修 ${open.length} 项`);
+if (testFailureDiagnostics.length) {
+  console.log("\n  bun test bounded failure context:");
+  for (const line of testFailureDiagnostics) console.log("    " + line);
+}

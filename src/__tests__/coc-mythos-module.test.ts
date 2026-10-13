@@ -106,15 +106,31 @@ describe("createMythosEntity", () => {
 // ============================================================
 
 /** 测试用 mock host */
-function createMockHost(): MythosModuleHost {
+function createMockHost(): MythosModuleHost & {
+  registeredSpells: Map<string, { sanCost: string; mpCost: number; description: string; effect?: string }>;
+} {
   const spellMap = new Map<string, { sanCost: string; mpCost: number; description: string; effect?: string }>();
   const sceneItems = new Map<string, string[]>();
   const itemDescriptions = new Map<string, string>();
   const messages: Array<{ s: string; c: string; t: string }> = [];
 
   return {
-    mythosSpells: spellMap,
-    knownMythosSpells: [],
+    registeredSpells: spellMap,
+    registerSpell(spell) {
+      if (spellMap.has(spell.name)) return false;
+      spellMap.set(spell.name, {
+        sanCost: spell.sanCost,
+        mpCost: spell.mpCost,
+        description: spell.description,
+        effect: spell.effectType,
+      });
+      return true;
+    },
+    registerTome(tome) {
+      const items = sceneItems.get(tome.sceneId) ?? [];
+      if (!items.includes(tome.name)) items.push(tome.name);
+      sceneItems.set(tome.sceneId, items);
+    },
     sceneItems,
     itemDescriptions,
     world: {
@@ -130,6 +146,115 @@ function createMockHost(): MythosModuleHost {
 }
 
 describe("MythosModuleLoader", () => {
+  it("does not swallow a real scene-exit database write failure into a fake imported success", () => {
+    const host = createMockHost();
+    const module = structuredClone(ARKHAM_LIBRARY_MODULE);
+    module.exits = { arkham_miskatonic: [{ target: "arkham_library_vault" }] };
+    (host.world as any).getDatabase = () => ({
+      query: () => ({ get: () => ({ exits: "[]" }) }),
+      run: () => { throw new Error("intentional Mythos exit database failure"); },
+    });
+    const loader = new MythosModuleLoader(host);
+
+    expect(() => loader.import(module)).toThrow("intentional Mythos exit database failure");
+    expect(loader.isImported(module.id)).toBe(false);
+  });
+
+  it("does not pre-mark a Mythos package imported when registerScene throws midway, so retry is real", () => {
+    const host = createMockHost();
+    const registered: string[] = [];
+    let failOnce = true;
+    host.registerScene = (sceneId) => {
+      registered.push(sceneId);
+      if (failOnce && registered.length === 2) {
+        failOnce = false;
+        throw new Error("intentional Mythos registerScene failure");
+      }
+    };
+    const loader = new MythosModuleLoader(host);
+
+    expect(() => loader.import(ARKHAM_LIBRARY_MODULE)).toThrow("intentional Mythos registerScene failure");
+    expect(loader.isImported(ARKHAM_LIBRARY_MODULE.id)).toBe(false);
+    const retried = loader.import(ARKHAM_LIBRARY_MODULE);
+    expect(retried[0]).not.toContain("\u5df2\u5bfc\u5165");
+    expect(loader.isImported(ARKHAM_LIBRARY_MODULE.id)).toBe(true);
+    expect(registered.length).toBeGreaterThan(2);
+  });
+
+  it("rejects malformed legacy input before imported state or host writes", () => {
+    const host = createMockHost();
+    let writes = 0;
+    host.world.upsertEntity = () => { writes++; };
+    host.addMessage = () => { writes++; };
+    const malformed = structuredClone(ARKHAM_LIBRARY_MODULE) as MythosModule;
+    malformed.spells = [{} as NonNullable<MythosModule["spells"]>[number]];
+    const loader = new MythosModuleLoader(host);
+
+    expect(() => loader.import(malformed)).toThrow("spells");
+    expect(loader.isImported(malformed.id)).toBe(false);
+    expect(writes).toBe(0);
+  });
+
+  it("rejects conflicting same-name tome declarations before any host placement", () => {
+    const host = createMockHost();
+    let writes = 0;
+    host.registerSpell = () => { writes++; return true; };
+    host.registerTome = () => { writes++; };
+    host.world.upsertEntity = () => { writes++; };
+    host.addMessage = () => { writes++; };
+    const conflicting = structuredClone(ARKHAM_LIBRARY_MODULE);
+    conflicting.tomes = [
+      ...conflicting.tomes!,
+      { ...conflicting.tomes![0]!, sceneId: "arkham_miskatonic" },
+    ];
+
+    const loader = new MythosModuleLoader(host);
+    expect(() => loader.import(conflicting)).toThrow("tome declaration conflicts");
+    expect(loader.isImported(conflicting.id)).toBe(false);
+    expect(writes).toBe(0);
+    expect(host.sceneItems.size).toBe(0);
+  });
+
+  it("rejects non-executable tome fields before every legacy host write", () => {
+    const invalidations: Array<[string, (tome: NonNullable<MythosModule["tomes"]>[number]) => void]> = [
+      ["zero rating", (tome) => { tome.tomeRating = 0; }],
+      ["fractional rating", (tome) => { tome.tomeRating = 1.5; }],
+      ["over-max rating", (tome) => { tome.tomeRating = 100; }],
+      ["malformed SAN cost", (tome) => { tome.sanCost = "abc"; }],
+      ["unbounded SAN dice", (tome) => { tome.sanCost = "1d1000001/0"; }],
+      ["duplicate spell names", (tome) => { tome.spells = ["接触远古者", "接触远古者"]; }],
+    ];
+
+    for (const [label, invalidate] of invalidations) {
+      const host = createMockHost();
+      let writes = 0;
+      host.registerSpell = () => { writes++; return true; };
+      host.registerTome = () => { writes++; };
+      host.world.upsertEntity = () => { writes++; };
+      host.addMessage = () => { writes++; };
+      host.registerScene = () => { writes++; };
+      const module = structuredClone(ARKHAM_LIBRARY_MODULE);
+      invalidate(module.tomes![0]!);
+
+      expect(() => new MythosModuleLoader(host).import(module), label).toThrow();
+      expect(writes, label).toBe(0);
+      expect(host.sceneItems.size, label).toBe(0);
+    }
+  });
+
+  it("accepts exact duplicate tome declarations without duplicate physical placement", () => {
+    const host = createMockHost();
+    const duplicate = structuredClone(ARKHAM_LIBRARY_MODULE);
+    duplicate.tomes = [...duplicate.tomes!, structuredClone(duplicate.tomes![0]!)];
+    let calls = 0;
+    const register = host.registerTome;
+    host.registerTome = (tome) => { calls++; register(tome); };
+
+    new MythosModuleLoader(host).import(duplicate);
+    expect(calls).toBe(2);
+    expect(host.sceneItems.get("arkham_library_vault")).toEqual(["塞拉伊诺断章"]);
+  });
+
   it("导入模组后 importedModules 包含该模组 id", () => {
     const host = createMockHost();
     const loader = new MythosModuleLoader(host);
@@ -150,14 +275,14 @@ describe("MythosModuleLoader", () => {
     expect(r2.some(l => l.includes("已导入"))).toBe(true);
   });
 
-  it("导入模组后法术注册到 mythosSpells", () => {
+  it("导入模组后经受限注册契约写入法术定义", () => {
     const host = createMockHost();
     const loader = new MythosModuleLoader(host);
 
     loader.import(ARKHAM_LIBRARY_MODULE);
 
-    expect(host.mythosSpells.has("阿卡姆档案检索")).toBe(true);
-    const spell = host.mythosSpells.get("阿卡姆档案检索")!;
+    expect(host.registeredSpells.has("阿卡姆档案检索")).toBe(true);
+    const spell = host.registeredSpells.get("阿卡姆档案检索")!;
     expect(spell.mpCost).toBe(1);
     expect(spell.sanCost).toBe("0/1d2");
   });
@@ -220,7 +345,7 @@ describe("MythosModuleLoader", () => {
 // ============================================================
 
 describe("MythosModuleLoader NPC 生成", () => {
-  it("NPC 指定 mythosCreatureId 时使用生物属性覆盖基础值", () => {
+  it("NPC 指定 mythosCreatureId 时仍以模组明确属性为准", () => {
     const host = createMockHost();
     const upserted: any[] = [];
     host.world.upsertEntity = (e: any) => { upserted.push(e); };
@@ -237,9 +362,9 @@ describe("MythosModuleLoader NPC 生成", () => {
         id: "test_deep_one",
         name: "深潜者斥候",
         type: "monster",
-        hp: 1, // 应被 mythos stats 覆盖
-        maxHp: 1,
-        ac: 1,
+        hp: 11,
+        maxHp: 11,
+        ac: 10,
         faction: "神话生物",
         sceneId: "dock",
         mythosCreatureId: "deep_one",
@@ -250,9 +375,9 @@ describe("MythosModuleLoader NPC 生成", () => {
 
     expect(upserted.length).toBe(1);
     const entity = upserted[0];
-    expect(entity.hp).toBe(15);       // 来自 deep_one 的 hp
-    expect(entity.maxHp).toBe(15);    // 来自 deep_one 的 maxHp
-    expect(entity.ac).toBe(13);       // 来自 deep_one 的 ac
+    expect(entity.hp).toBe(11);       // 模组显式遭遇值高于通用生物目录
+    expect(entity.maxHp).toBe(11);
+    expect(entity.ac).toBe(10);
     expect(entity.name).toBe("深潜者斥候"); // name 保持模组自定义
   });
 

@@ -17,105 +17,84 @@
 
 import { describe, expect, test } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
-function seedEntity(
-  session: GameSession,
-  id: string,
-  name: string,
-  type: "pc" | "npc" | "monster",
-  scene: string,
-) {
-  session.world.upsertEntity({
-    id,
-    name,
-    type,
-    hp: 10,
-    maxHp: 10,
-    ac: 10,
-    status: [],
-    position: scene,
-    scene_id: scene,
-  } as never);
+const LLM = {
+  apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
+  model: "mock", maxTokens: 64, temperature: 0,
+};
+
+async function barnSession(id: string): Promise<GameSession> {
+  const session = new GameSession(id, "cosmic-horror", LLM, "investigator", "Scene Tester");
+  expect((await session.act("加载模组 普瑞米尔的谷仓")).error).toBeUndefined();
+  return session;
 }
 
 describe("场景在场过滤", () => {
-  test("getState().npcs 只包含当前场景的 NPC", () => {
-    const session = new GameSession("t_presence_npc", "cosmic-horror");
-    session.world.registerScene("特里坎家", "特里坎家");
-    session.setScene("特里坎家");
-    seedEntity(session, "player", "调查员", "pc", "特里坎家");
-    seedEntity(session, "npc_present", "菲碧·特里坎", "npc", "特里坎家");
-    seedEntity(session, "npc_elsewhere", "警员", "npc", "警察局");
+  test("getState().npcs 只包含当前场景的 NPC", async () => {
+    const session = await barnSession("t_presence_npc");
+    try {
+      expect(activateRegisteredGameSessionSceneForTest(session, "特里坎家")).toBe(true);
+      const names = session.getState().npcs.map((npc) => npc.name);
 
-    const names = session.getState().npcs.map((n) => n.name);
-
-    expect(names).toContain("菲碧·特里坎");
-    expect(names).not.toContain("警员");
+      expect(names).toContain("菲碧·特里坎");
+      expect(names).not.toContain("酒吧保镖");
+    } finally { session.close(); }
   });
 
-  test("getState().monsters 只包含当前场景的怪物", () => {
-    const session = new GameSession("t_presence_monster", "cosmic-horror");
-    session.world.registerScene("下水道", "下水道");
-    session.setScene("下水道");
-    seedEntity(session, "player", "调查员", "pc", "下水道");
-    seedEntity(session, "monster_present", "食尸鬼", "monster", "下水道");
-    seedEntity(session, "monster_elsewhere", "Mi-Go", "monster", "农场外围");
+  test("getState().monsters 只包含当前场景的怪物", async () => {
+    const session = await barnSession("t_presence_monster");
+    try {
+      expect(activateRegisteredGameSessionSceneForTest(session, "下水道")).toBe(true);
+      const names = session.getState().monsters.map((monster) => monster.name);
 
-    const names = session.getState().monsters.map((m) => m.name);
-
-    expect(names).toContain("食尸鬼");
-    expect(names).not.toContain("Mi-Go");
+      expect(names).toContain("食尸鬼");
+      expect(names).not.toContain("Mi-Go");
+    } finally { session.close(); }
   });
 
-  test("场景切换后在场名单随之切换", () => {
-    const session = new GameSession("t_presence_move", "cosmic-horror");
-    session.world.registerScene("特里坎家", "特里坎家");
-    session.world.registerScene("维森酒吧", "维森酒吧");
-    session.setScene("特里坎家");
-    seedEntity(session, "player", "调查员", "pc", "特里坎家");
-    seedEntity(session, "npc_a", "菲碧·特里坎", "npc", "特里坎家");
-    seedEntity(session, "npc_b", "酒吧保镖", "npc", "维森酒吧");
+  test("场景切换后在场名单随之切换", async () => {
+    const session = await barnSession("t_presence_move");
+    try {
+      expect(activateRegisteredGameSessionSceneForTest(session, "特里坎家")).toBe(true);
+      expect(session.getState().npcs.map((npc) => npc.name)).toContain("菲碧·特里坎");
+      expect(session.getState().npcs.map((npc) => npc.name)).not.toContain("酒吧保镖");
 
-    expect(session.getState().npcs.map((n) => n.name)).toEqual(["菲碧·特里坎"]);
-
-    session.setScene("维森酒吧");
-
-    expect(session.getState().npcs.map((n) => n.name)).toEqual(["酒吧保镖"]);
+      expect(activateRegisteredGameSessionSceneForTest(session, "维森酒吧")).toBe(true);
+      expect(session.getState().npcs.map((npc) => npc.name)).toContain("酒吧保镖");
+      expect(session.getState().npcs.map((npc) => npc.name)).not.toContain("菲碧·特里坎");
+    } finally { session.close(); }
   });
 });
 
 describe("KP 切换场景", () => {
-  test("切换到已注册场景后 getState().scene 随之变更", () => {
-    const session = new GameSession("t_kp_scene_ok", "cosmic-horror");
-    session.world.registerScene("barn_interior", "谷仓内部");
-
-    expect(session.setScene("barn_interior")).toBe(true);
-    expect(session.getState().scene).toBe("barn_interior");
+  test("切换到已注册场景后 getState().scene 随之变更", async () => {
+    const session = await barnSession("t_kp_scene_ok");
+    try {
+      expect(activateRegisteredGameSessionSceneForTest(session, "建筑内")).toBe(true);
+      expect(session.getState().scene).toBe("建筑内");
+    } finally { session.close(); }
   });
 
-  test("切换到未注册场景应报告失败，而不是静默成功", () => {
-    const session = new GameSession("t_kp_scene_missing", "cosmic-horror");
-    session.world.registerScene("barn_interior", "谷仓内部");
-    session.setScene("barn_interior");
-
-    expect(session.setScene("never_registered")).toBe(false);
-    // 失败不得污染当前场景
-    expect(session.getState().scene).toBe("barn_interior");
+  test("切换到未注册场景应报告失败，而不是静默成功", async () => {
+    const session = await barnSession("t_kp_scene_missing");
+    try {
+      expect(activateRegisteredGameSessionSceneForTest(session, "建筑内")).toBe(true);
+      expect(activateRegisteredGameSessionSceneForTest(session, "never_registered")).toBe(false);
+      // 失败不得污染当前场景
+      expect(session.getState().scene).toBe("建筑内");
+    } finally { session.close(); }
   });
 
-  test("连续切换以最后一次为准，不残留多个活动场景", () => {
-    const session = new GameSession("t_kp_scene_switch", "cosmic-horror");
-    session.world.registerScene("barn_interior", "谷仓内部");
-    session.world.registerScene("farm_exterior", "农场外围");
+  test("连续切换以最后一次为准，不残留先前场景的在场名单", async () => {
+    const session = await barnSession("t_kp_scene_switch");
+    try {
+      expect(activateRegisteredGameSessionSceneForTest(session, "特里坎家")).toBe(true);
+      expect(activateRegisteredGameSessionSceneForTest(session, "维森酒吧")).toBe(true);
 
-    session.setScene("barn_interior");
-    session.setScene("farm_exterior");
-
-    expect(session.getState().scene).toBe("farm_exterior");
-    const active = session.world
-      .getDatabase()
-      .query("SELECT COUNT(*) AS n FROM scenes WHERE is_active = 1")
-      .get() as { n: number };
-    expect(active.n).toBe(1);
+      expect(session.getState().scene).toBe("维森酒吧");
+      expect(session.getState().npcs.map((npc) => npc.name)).toContain("酒吧保镖");
+      expect(session.getState().npcs.map((npc) => npc.name)).not.toContain("菲碧·特里坎");
+    } finally { session.close(); }
   });
 });

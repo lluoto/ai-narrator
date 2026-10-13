@@ -17,6 +17,17 @@ action is explored. Conflicting automatic writes and automatic cycles fail
 closed. Checked-method failures follow the declared failback threshold and the
 analyzer fails with `state_limit_exceeded` rather than silently truncating.
 
+The compiler-resolved analysis has a fail-closed capacity of 500
+control-equivalence classes. `reachableStateCount` is that bounded control
+class count, not a Cartesian count of complete `MechanicsState` combinations.
+Only a conservative pure-observation clue can be omitted from the control key:
+it must be non-core, unused by every discovery, connection, transition,
+ending, and reward predicate; every discovery method for it must have exactly
+one success effect that discovers only itself; and it may have no failure,
+failback, or other success effect. A clue discovered by any other mechanism
+effect is retained. This changes analysis storage only: automatic settlement,
+runtime execution, and replay continue to use complete state hashes.
+
 `src/compiler/mechanics-execution.ts` owns these executable semantics. The
 reachability analyzer and witness replay consume that one pure core; the core
 also supports diagnostics-only prescribed execution. This is not a runtime or
@@ -28,6 +39,17 @@ compatible automatic batches, and ending steps each count once. A batch retains
 its concrete declared mechanism IDs. Search and replay share the same execution
 semantics; replay verifies every mechanism, outcome, and before/after state
 hash. Witnesses are graph evidence, not player natural-language run evidence.
+
+Each reported edge is likewise a real shared-core action with complete
+before/after `mechanicsStateHash` values. The `edges` collection is evidence
+from one representative of each control-equivalence class, however, so callers
+must not treat it as a complete full-hash adjacency graph or infer that every
+pure-clue hash is expanded. No public control-key mapping is exposed.
+
+Persisted reachability reports use artifact component version 1.1. It captures
+terminal-loss witnesses and the control-class count semantics; an otherwise
+rehashed 1.0 report is rejected fail-closed rather than interpreted under the
+new contract.
 
 `src/diagnostics/compiler-process-simulation.ts` proves one narrower process:
 `prepare -> questions -> hints -> resolve -> execute`. It accepts synthetic

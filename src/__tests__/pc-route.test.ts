@@ -18,16 +18,30 @@ const CFG = {
   model: "mock", maxTokens: 512, temperature: 0.7,
 };
 
+/** Routing is a pure in-memory concern; Career persistence belongs to durable hosts. */
+function memorySession(id: string, archetypeId?: string, characterName?: string): GameSession {
+  return new GameSession(
+    id, "cosmic-horror", CFG, archetypeId, characterName,
+    undefined, undefined, undefined, undefined, { careerEntryPersistence: "transient" },
+  );
+}
+
+function characterSnapshot(session: GameSession, pcId: string): any | undefined {
+  const partyMember = session.getState().party.find((entry) => entry.pcId === pcId);
+  if (partyMember) return partyMember;
+  return pcId === session.activePlayerId ? session.activeCharacter ?? undefined : undefined;
+}
+
 describe("act 按 pcId 路由——行为正确", () => {
   it("**正确**：act(input, \"p2\") 后 getState().player 与消息归属都落在 p2，不再是 p1", async () => {
-    const s: any = new GameSession(`pr1-${Math.random()}`, "cosmic-horror", CFG);
+    const s: any = memorySession(`pr1-${Math.random()}`);
     await s.act("创建角色 investigator 甲"); // p1
     await s.act("创建队友 乙 investigator"); // p2
     expect(s.activePlayerId).toBe("p1");
     await s.act("顺时针查看房间一眼", "p2");
     expect(s.activePlayerId).toBe("p2"); // 路由生效，activePlayerId 切到 p2
     // getState().player 反映 p2（错误行为的红线：仍记在 p1 上就红）
-    expect(s.getState().player.name).toBe(s.characters.get("p2").name);
+    expect(s.getState().player.name).toBe(characterSnapshot(s, "p2")?.name);
     // 消息归属跟着变：getHistory 取的是 active（p2）的历史，应含 p2 的行动
     const hist = s.getHistory().messages;
     const actionMsg = hist.find((m: any) => m.type === "action");
@@ -39,10 +53,10 @@ describe("act 按 pcId 路由——行为正确", () => {
     // 用带 archetype 的构造，p1 的会话槽位 characterName 一开始就是真名"甲"——
     // 不然会撞上"无 archetype 建号后槽位名仍是兜底'调查员'"这个与本题无关的
     // 既有怪癖，分散本测试要量的事（路由让消息归属跟着 pcId 走）。
-    const s: any = new GameSession(`pr2-${Math.random()}`, "cosmic-horror", CFG, "investigator", "甲");
+    const s: any = memorySession(`pr2-${Math.random()}`, "investigator", "甲");
     await s.act("创建队友 乙 investigator"); // p2 = 乙
-    const name1 = s.characters.get("p1").name; // 甲
-    const name2 = s.characters.get("p2").name; // 乙
+    const name1 = characterSnapshot(s, "p1")?.name; // 甲
+    const name2 = characterSnapshot(s, "p2")?.name; // 乙
     await s.act("p2的动作", "p2");
     // 消息归属的核心信号是 speaker：p2 的那条 action 该署 name2（乙）——配"加入的
     // 那个新成员自己"，不是趴在 p1 的甲头上。
@@ -60,34 +74,46 @@ describe("act 按 pcId 路由——行为正确", () => {
   });
 
   it("**文本相似但合法**：act(input, \"p1\") 传的是当前活跃 pcId 本身——不该报错也不该二次切换", async () => {
-    const s: any = new GameSession(`pr3-${Math.random()}`, "cosmic-horror", CFG);
+    const s: any = memorySession(`pr3-${Math.random()}`);
     await s.act("创建角色 investigator 甲"); // p1 是活跃
     const before = s.activePlayerId;
     const res = await s.act("原地观察", "p1"); // 传当前活跃 pcId
     expect(s.activePlayerId).toBe(before);
     expect(res.error).toBeUndefined();
-    expect(res.state.player.name).toBe(s.characters.get("p1").name);
+    expect(res.state.player.name).toBe(characterSnapshot(s, "p1")?.name);
   });
 });
 
-describe("重名 PC 各自按 pcId 路由", () => {
-  it("**正确**：两个同名 PC，用各自的 pcId 都能正确路由到自己头上，不会取到第一个", async () => {
-    const s: any = new GameSession(`pr4-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建队友 一件东西 investigator"); // p2
-    await s.act("创建队友 一件东西 investigator"); // p3，同一个名字
-    const name = s.characters.get("p2").name;
-    const name3 = s.characters.get("p3").name;
-    expect(name).toBe(name3); // 确实是重名
-    expect(s.characters.get("p2")).not.toBe(s.characters.get("p3")); // 是两个不同 PC
+describe("角色名是 Career 绑定身份", () => {
+  it("**正确**：跨 pcId 同名被拒绝，不同名仍按 pcId 正确路由", async () => {
+    const s: any = memorySession(`pr4-${Math.random()}`);
+    const first = s.addPartyMember("一件东西", "investigator"); // p2
+    expect(first).not.toHaveProperty("rejected");
+    // Rebuilding the same PC retains its Career-bound name: the uniqueness
+    // guard is strictly across pcIds, not a prohibition on replacement.
+    const rebuild = await s.act("创建角色 investigator 一件东西", "p2");
+    expect(rebuild.error).toBeUndefined();
+    expect(characterSnapshot(s, "p2")?.name).toBe("一件东西");
+    const beforeDuplicate = s.getState();
+    expect(s.addPartyMember("一件东西", "investigator")).toEqual({
+      rejected: expect.any(String),
+      reason: "duplicate_character_name",
+    });
+    expect(s.getState()).toEqual(beforeDuplicate);
+
+    const distinct = s.addPartyMember("另一件东西", "investigator"); // p3
+    expect(distinct).not.toHaveProperty("rejected");
+    const party = s.getState().party as Array<{ pcId: string; name: string }>;
+    expect(party.filter((member) => member.pcId === "p2" || member.pcId === "p3")).toHaveLength(2);
     await s.act("p3的那句", "p3");
     expect(s.activePlayerId).toBe("p3");
-    expect(s.getState().player.hp).toBe(s.characters.get("p3").hp); // 状态落在 p3，不是"第一个同名"p2
+    expect(s.getState().player.hp).toBe(s.activeCharacter.hp);
   });
 });
 
 describe("未知 pcId → 结构化拒绝，activePlayerId 不变", () => {
   it("**错误行为的红线**：传了不存在的 pcId，act() 置 error 且任何状态都不能被改动（activePlayerId 不能先切过去再拒）", async () => {
-    const s: any = new GameSession(`pr5-${Math.random()}`, "cosmic-horror", CFG);
+    const s: any = memorySession(`pr5-${Math.random()}`);
     await s.act("创建角色 investigator 甲"); // p1 活跃
     const beforeId = s.activePlayerId;
     const beforeRound = s.round;
@@ -100,8 +126,8 @@ describe("未知 pcId → 结构化拒绝，activePlayerId 不变", () => {
   });
 
   it("**目标行为错误的对照**：空壳 p1（还没有角色卡）在创建角色前，也不能以它行动——没卡可行动就该拒", async () => {
-    const s: any = new GameSession(`pr6-${Math.random()}`, "cosmic-horror", CFG); // 无 archetype，走空壳分支
-    expect(s.characters.has("p1")).toBe(false); // 空壳没有角色卡
+    const s: any = memorySession(`pr6-${Math.random()}`); // 无 archetype，走空壳分支
+    expect(characterSnapshot(s, "p1")).toBeUndefined(); // 空壳没有角色卡
     const res = await s.act("原地观察", "p1");
     expect(res.error).toEqual({ code: "unknown_target", targetId: "p1" });
   });
@@ -109,34 +135,34 @@ describe("未知 pcId → 结构化拒绝，activePlayerId 不变", () => {
 
 describe("getState() 暴露队伍（pcId + 名字 + control）", () => {
   it("**正确**：party 里的每个成员都会出现在 state.party，带 pcId/name/control", async () => {
-    const s: any = new GameSession(`pr7-${Math.random()}`, "cosmic-horror", CFG);
+    const s: any = memorySession(`pr7-${Math.random()}`);
     await s.act("创建角色 investigator 甲"); // p1
     await s.act("创建队友 乙 investigator"); // p2
     const st = s.getState();
     const pcIds = st.party.map((m: any) => m.pcId).sort();
     expect(pcIds).toEqual(["p1", "p2"]);
     const p2m = st.party.find((m: any) => m.pcId === "p2");
-    expect(p2m.name).toBe(s.characters.get("p2").name);
+    expect(p2m.name).toBe(characterSnapshot(s, "p2")?.name);
     expect(["auto", "player:"].some((p) => String(p2m.control).startsWith(p))).toBe(true);
   });
 });
 
 describe("server runAction：action 端点把 pcId 转发给 act()", () => {
   it("**正确**：runAction 解析 body.pcId 并路由到对应 PC", async () => {
-    const s: any = new GameSession(`pr8-${Math.random()}`, "cosmic-horror", CFG);
+    const s: any = memorySession(`pr8-${Math.random()}`);
     await s.act("创建角色 investigator 甲"); // p1
     await s.act("创建队友 乙 investigator"); // p2
     const r = await runAction(s, { input: "p2的行动", pcId: "p2" });
     expect(r.status).toBe(200);
     expect(s.activePlayerId).toBe("p2");
     const state: any = (r.body as any).state;
-    expect(state.player.name).toBe(s.characters.get("p2").name);
+    expect(state.player.name).toBe(characterSnapshot(s, "p2")?.name);
     const actionMsgs = ((r.body as any).events as any[]).filter((e: any) => e.type === "action");
     expect(actionMsgs.some((e: any) => e.content === "p2的行动")).toBe(true);
   });
 
   it("**错误行为的红线**：未知 pcId 走 runAction 得到结构化 404，activePlayerId 不变", async () => {
-    const s: any = new GameSession(`pr9-${Math.random()}`, "cosmic-horror", CFG);
+    const s: any = memorySession(`pr9-${Math.random()}`);
     await s.act("创建角色 investigator 甲");
     const beforeId = s.activePlayerId;
     const r = await runAction(s, { input: "原地观察", pcId: "p99" });
@@ -146,16 +172,16 @@ describe("server runAction：action 端点把 pcId 转发给 act()", () => {
   });
 
   it("**目标行为错误的对照**：不传 pcId 时沿用 activePlayerId（既有客户端不破），行为与直接 act 一致", async () => {
-    const s: any = new GameSession(`prA-${Math.random()}`, "cosmic-horror", CFG);
+    const s: any = memorySession(`prA-${Math.random()}`);
     await s.act("创建角色 investigator 甲");
     const r = await runAction(s, { input: "低头看地板" });
     expect(r.status).toBe(200);
     expect(s.activePlayerId).toBe("p1");
-    expect((r.body as any).state.player.name).toBe(s.characters.get("p1").name);
+    expect((r.body as any).state.player.name).toBe(characterSnapshot(s, "p1")?.name);
   });
 
   it("**文本相似但合法**：pcId 传了空白串等价于不传", async () => {
-    const s: any = new GameSession(`prB-${Math.random()}`, "cosmic-horror", CFG);
+    const s: any = memorySession(`prB-${Math.random()}`);
     await s.act("创建角色 investigator 甲");
     const r = await runAction(s, { input: "看天", pcId: "   " });
     expect(r.status).toBe(200);

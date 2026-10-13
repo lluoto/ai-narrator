@@ -150,7 +150,8 @@ function templateFirstEncounter(npc: ModuleNPC): string {
   } else if (a.isWarm) {
     line = `欢迎！快请进。有什么需要我帮忙的，尽管说。`;
   } else {
-    line = `你们好。我就是${name}。听说你们在调查什么？`;
+    // 初见时没有调查进度或自报身份的来源，不能替 NPC 猜测两者。
+    line = `你好。有什么事吗？`;
   }
 
   // 人在前、神态在后 —— 不要用无主语的神态词起头，那是舞台指示不是叙述。
@@ -193,7 +194,8 @@ function warnFallback(npc: ModuleNPC, reason: string): void {
  *
  * 模组里的 knowledge 是速记笔记，不是台词："镇上最近有多起失踪案"。
  * 原先只补一个句号就当台词用，念出来是新闻标题不是人说话。模板没法真的改写中文，
- * 但至少可以按人物把它包成"某人在转述"的口气，而不是一条字幕。
+ * 但不能为速记补造信息来源（例如儿童并不必然是听父母转述，正式角色
+ * 也未必看过案卷）。这里只保留原有事实与说话者当下可表达的收尾语。
  */
 function templateKnowledgeReveals(npc: ModuleNPC): string[] {
   const a = analyseNpc(npc);
@@ -209,31 +211,18 @@ function templateKnowledgeReveals(npc: ModuleNPC): string[] {
   const closing = (body: string): string => {
     if (a.isChild) return `${body}。我知道的就这么多啦。`;
     if (a.isAnxious) return `${body}……我知道的就这些了。`;
-    if (a.isFormal) return `${body}。案卷上就是这么记的。`;
+    if (a.isFormal) return `${body}。我能说的就这些。`;
     if (a.isHostile) return `${body}。就这些，别再问了。`;
     if (a.isWarm) return `${body}。我能想起来的就这么多。`;
     return `${body}。`;
   };
-  // 中间的条目：只染上语气，不作总结。
-  const middles: string[] = a.isChild
-    ? ["${b}。我听大人说的。", "${b}。妈妈是这么讲的。", "${b}，我记得是这样。"]
-    : a.isAnxious
-      ? ["${b}……", "${b}。你们要相信我。", "${b}，我一直在想这件事。"]
-      : a.isFormal
-        ? ["${b}。这一条记录在案。", "${b}。按流程是这样。", "${b}。"]
-        : a.isHostile
-          ? ["${b}。", "${b}，就这样。", "${b}，你自己掂量。"]
-          : a.isWarm
-            ? ["${b}。", "${b}，我记得挺清楚。", "${b}，那阵子大家都在议论。"]
-            : ["${b}。"];
-
   const total = npc.knowledge.length;
   return npc.knowledge.map((k, i) => {
     // 句子已自带标点时不再追加"。"，避免"。。"双句号；去掉尾部残句标点后补全
     const trimmed = k.replace(/[。！？…]+$/, "");
     if (i === total - 1) return closing(trimmed);
-    // 轮流取而不是随机：同一个 NPC 连着说三句，随机很容易连撞两次
-    return middles[i % middles.length]!.replace("${b}", trimmed);
+    // 中间条目不能补写目击/转述关系、文书或群众反应——这些都不在 knowledge 里。
+    return `${trimmed}。`;
   });
 }
 
@@ -246,7 +235,7 @@ function templateRevisitEncounter(npc: ModuleNPC): string {
   const name = npc.name.replace(/[（(].*[）)]$/, "").trim();
 
   if (a.isChild) {
-    return `${name}抱着皮球，歪着头天真地说：\n……又是你们呀。你们找到哥哥了吗？`;
+    return `${name}歪着头天真地说：\n……又是你们呀。有什么想问的？`;
   }
   if (a.isAnxious) {
     return `${name}焦虑不安地搓着手说：\n你们回来了！怎么样？有消息吗？`;

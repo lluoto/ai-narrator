@@ -45,15 +45,16 @@ describe("步骤 5C：ModuleData 叙事 NPC 进入自由跑团", () => {
     const output = [loaded.narrative, ...loaded.events.map((event) => event.content)].join("\n");
     expect(output).toContain("【统一模组：普瑞米尔的谷仓】");
     expect(output).not.toContain("【剧本杀模组：普瑞米尔的谷仓】");
-    expect(Reflect.get(session, "_moduleLoader")).toBeUndefined();
+    expect(Reflect.ownKeys(session)).not.toContain("_moduleLoader");
+    expect(Reflect.ownKeys(session)).not.toContain("_moduleDataLoader");
   });
 
   for (const [request, title] of [["阿卡姆档案检查", "密斯卡托尼克之秘"], ["印斯茅斯的阴影", "印斯茅斯的阴霾"]] as const) {
     it(`${request} 继续走按需创建的 legacy MythosModuleLoader 分支`, async () => {
       const session = new GameSession(`module-data-npc-legacy-${request}`, "cosmic-horror", config, undefined, "调查员");
-      expect(Reflect.get(session, "_moduleLoader")).toBeUndefined();
+      expect(Reflect.ownKeys(session)).not.toContain("_moduleLoader");
       const loaded = await session.act(`加载模组 ${request}`);
-      expect(Reflect.get(session, "_moduleLoader")).toBeDefined();
+      expect(Reflect.ownKeys(session)).not.toContain("_moduleLoader");
       expect(loaded.events.map((event) => event.content).join("\n")).toContain(`【剧本杀模组：${title}】`);
     });
   }

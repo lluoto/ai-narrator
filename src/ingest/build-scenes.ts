@@ -4,7 +4,8 @@
 // 其余一律不填 —— 没抽就是没抽。填 undefined 或编一个占位值，
 // 都会让校准报告读不出「还差多少」，而那份差异清单正是下一轮的路线图。
 //
-// ▶ 条目 buildScenes 不消费：基准里 ▶捕兽夹 是 ModuleItem，▶ 搜查项是 Clue，
+// 结构化条目（来自显式标记或受上下文约束的发现列表）不由 buildScenes 消费：
+// 基准里 ▶捕兽夹 是 ModuleItem，▶ 搜查项是 Clue，
 // 都不属于场景描述。混进 description 会让抽线索/抽物品的那一步
 // 面对一份已经被污染的正文。不消费不是遗漏，是分工 —— 同一次跑里
 // 下游的 toItemInputs + buildItems 就把它们接走了。
@@ -15,7 +16,7 @@ import type { SectionKind } from "./classify-sections";
 
 interface BuildScenesResult {
   scenes: Scene[];
-  /** 跳过的块、不消费的 ▶ 条目、重名标题 —— 不静默丢东西 */
+  /** 跳过的块、不消费的结构化条目、重名标题 —— 不静默丢东西 */
   warnings: string[];
 }
 
@@ -53,7 +54,8 @@ export function buildScenes(
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i] as Section;
 
-    // 在所有 continue 之前记数。这个数说的是**输入里一共有多少 ▶ 条目** ——
+    // 在所有 continue 之前记数。这个数说的是**输入里一共有多少结构化条目** ——
+    // 它们可能来自显式标记，也可能来自受上下文约束的发现列表。
     // buildScenes 一条都不消费，所以它等于全部块上条目数的总和，与分类结果无关。
     //
     // 原来它在 kind === "scene" 之后加，于是挂在 structure/npc/rule 块上的条目
@@ -64,7 +66,7 @@ export function buildScenes(
     // warnings 那个字段的注释写着「不静默丢东西」，那就得是这个口径。
     //
     // 这里原先写的是 16，错在搬错了单位：16 是**有条目的块**数
-    // （实跑 15 个场景块加上那 1 个 npc 块），规格里那句「39 个 ▶ 条目落在 16 个块里」
+    // （实跑 15 个场景块加上那 1 个 npc 块），规格里那句「39 个结构化条目落在 16 个块里」
     // 说的是块。非场景块上的条目数是 2 —— report 自己就能驳倒 16：
     // 全文 39 条、到物品那一步 37 条，差额就是这 2 条。
     //
@@ -111,7 +113,7 @@ export function buildScenes(
   // 建物品（实跑 17 条成了 ModuleItem），report 里这句话正压在「它们被消费掉」的
   // 那一节上面。数没错，是话错了：一份度量工具说反话比不报还糟。
   if (droppedItems > 0) {
-    warnings.push(`${droppedItems} 个 ▶ 条目 buildScenes 不消费（计入全部块，含非场景块与前置块），由下游 item/clue 路径处理`);
+    warnings.push(`${droppedItems} 个结构化条目 buildScenes 不消费（来源包括显式标记与受上下文约束的发现列表；计入全部块，含非场景块与前置块），由下游 item/clue 路径处理`);
   }
   for (const [title, n] of titleCount) {
     if (n > 1) {

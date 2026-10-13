@@ -16,6 +16,7 @@
 
 import { describe, test, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
@@ -24,7 +25,7 @@ const CFG = {
 
 type Ent = { id: string; name: string; type: string; hp: number; maxHp: number; ac: number; status: string[]; position: string; scene_id?: string };
 type S = {
-  world: { upsertEntity: (e: unknown) => void; getCurrentState: () => { scene: string; entities: Record<string, Ent> } };
+  world: { getCurrentState: () => { scene: string; entities: Record<string, Ent> } };
   activeCharacter: { hp: number; maxHp: number };
   activePlayerId: string;
   getState: () => { player: { hp: number; maxHp: number; status: string[] }; scene: string };
@@ -32,14 +33,31 @@ type S = {
 };
 
 async function arena(enemyHp = 200) {
-  const s = new GameSession(`eid-${Math.random()}`, "cosmic-horror", CFG) as unknown as S;
-  await s.act("创建角色 investigator 甲"); // 真实入口——不是构造函数那条路
-  const scene = s.world.getCurrentState().scene;
-  s.world.upsertEntity({
+  const s = new GameSession(
+    `eid-${Math.random()}`,
+    "cosmic-horror",
+    CFG,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "preferred",
+    { careerEntryPersistence: "transient" },
+  );
+  restoreSignedOrdinaryWorld(s, CFG, (world) => world.upsertEntity({
     id: "m1", name: "食尸鬼", type: "monster", hp: enemyHp, maxHp: enemyHp,
-    ac: 0, status: [], position: scene, scene_id: scene,
-  } satisfies Ent);
-  return s;
+    ac: 0, status: [], position: "tavern", scene_id: "tavern",
+  }));
+  return s as unknown as S;
+}
+
+function npcCounterhitRandom(): () => number {
+  // Player fumble, miss narration, NPC critical, player dodge fumble, NPC
+  // leg hit, NPC narration, then a major-wound unconscious result.
+  const values = [0.99, 0, 0, 0.99, 0, 0, 0, 0.99, 0];
+  let index = 0;
+  return () => values[index++ % values.length]!;
 }
 
 describe("实体 id 收口 —— getState() 必须读到战斗/移动真正写的实体", () => {
@@ -47,7 +65,7 @@ describe("实体 id 收口 —— getState() 必须读到战斗/移动真正写�
     const s = await arena();
     const before = s.getState().player.hp;
     const real = Math.random;
-    Math.random = () => 0; // 必中
+    Math.random = npcCounterhitRandom();
     try { await s.act("攻击 食尸鬼"); } finally { Math.random = real; }
     expect(s.getState().player.hp).toBeLessThan(before);
   }, 20_000);
@@ -55,7 +73,7 @@ describe("实体 id 收口 —— getState() 必须读到战斗/移动真正写�
   test("**错误行为的红线**：重伤后 state.player.status 必须非空", async () => {
     const s = await arena();
     const real = Math.random;
-    Math.random = () => 0; // 必中 + 暴击，凑重伤
+    Math.random = npcCounterhitRandom();
     try {
       for (let i = 0; i < 8 && s.getState().player.status.length === 0; i++) {
         await s.act("攻击 食尸鬼");

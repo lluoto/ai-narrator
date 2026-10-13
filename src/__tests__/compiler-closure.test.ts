@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { parseCompilerHintValue, resolveDraftModule } from "../compiler/compile-hint-resolution";
-import { buildCompilerQuestionQueue, type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
+import { buildCompilerQuestionQueue, MODULE_COMPILE_HINTS_SCHEMA_VERSION, type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
 import { compileDeterministicTemplates } from "../compiler/deterministic-template-compiler";
 import { buildSourceFactGraph } from "../compiler/source-fact-graph";
 import { cleanPageWithTrace, joinPagesWithTrace } from "../ingest/clean-text";
@@ -49,11 +49,18 @@ function closureHints(data: ReturnType<typeof fixture>): ModuleCompileHints {
   const entryQuestion = queue.questions.find((question) => question.kind === "entry_scene")!;
   const endingQuestion = queue.questions.find((question) => question.kind === "ending_rule")!;
   return {
-    schemaVersion: "1.1.0",
+    schemaVersion: MODULE_COMPILE_HINTS_SCHEMA_VERSION,
     moduleId: queue.moduleId,
     documentHash: queue.documentHash,
     sourceGraphIdentity: queue.sourceGraphIdentity,
     resolutions: [
+      // These mechanics fixtures intentionally disclose each exact atom as a
+      // shell.  It is a reviewer answer, never a compiler fallback.
+      ...queue.questions.filter((question) => question.kind === "clue_fact_facets").map((question) => resolution(question, {
+        shell: (question.allowedClueFactAtoms ?? []).map((atom) => ({ atomId: atom.id, quote: atom.quote })),
+        findings: [],
+        sourceOnlyAtomIds: [],
+      })),
       ...roleQuestions.map((question) => resolution(question, { role: "playable_scene" })),
       resolution(entryQuestion, { sceneCandidateId: entry.id }),
       resolution(topology(entry.id), { connections: [
@@ -130,8 +137,6 @@ describe("document structure to closed-world compilation", () => {
     it(`rejects complete subtree rebinding with preserved identity, updated review=${updateReview}`, () => {
       const data = fixture();
       const originalGraph = structuredClone(data.graph);
-      const originalQueue = data.queue;
-      const originalHints = closureHints(data);
       const parent = data.draft.clueCandidates[0]!;
       const child = data.draft.clueCandidates[1]!;
       parent.markedItemStatementId = child.markedItemStatementId;
@@ -149,27 +154,11 @@ describe("document structure to closed-world compilation", () => {
       // Keep one candidate per genuine subtree so duplicate-question validation cannot mask identity.
       data.draft.clueCandidates = data.draft.clueCandidates.filter((clue) => clue.id !== child.id);
       data.draft.interpretations = data.draft.interpretations.filter((candidate) => candidate !== data.draft.interpretations[1]);
-      data.queue = buildCompilerQuestionQueue(data.graph, data.draft);
-      data.draft.readiness.questionQueueHash = data.queue.queueHash;
-      const hints = { ...originalHints, resolutions: data.queue.questions.flatMap((question) => {
-        const oldQuestion = originalQueue.questions.find((old) => old.kind === question.kind && old.subjectCandidateId === question.subjectCandidateId);
-        const oldAnswer = originalHints.resolutions.find((answer) => answer.questionId === oldQuestion?.id);
-        return oldAnswer ? [resolution(question, structuredClone(oldAnswer.value))] : [];
-      }) };
-      const ending = hints.resolutions.find((answer) => answer.kind === "ending_rule")!;
-      const endingValue = ending.value as { declarations: { spec: { when: { predicates: ({ kind: string; clueId?: string; predicate?: { clueId: string } })[] } } }[] };
-      for (const declaration of endingValue.declarations) for (const predicate of declaration.spec.when.predicates) {
-        if (predicate.clueId === child.id) predicate.clueId = parent.id;
-        if (predicate.predicate?.clueId === child.id) predicate.predicate.clueId = parent.id;
-      }
-      const answer = hints.resolutions.find((answer) => answer.kind === "discovery_method" && (answer.value as { clueCandidateId: string }).clueCandidateId === parent.id)!;
-      const value = answer.value as { locationSceneCandidateId: string; spec: { targetId: string } };
-      value.locationSceneCandidateId = child.sceneCandidateId;
-      value.spec.targetId = child.sceneCandidateId;
-      const resolved = resolveDraftModule(data.graph, data.draft, data.queue, hints);
+      // Facet questions now validate the canonical marked-item subtree while
+      // rebuilding the queue, which rejects this attempted identity rewrite
+      // earlier than the former default-location readiness check.
+      expect(() => buildCompilerQuestionQueue(data.graph, data.draft)).toThrow("canonical marked clue heading scope");
       expect(data.graph).toEqual(originalGraph);
-      expect(resolved.readiness.blockingCodes).toContain("invalid_default_discovery_binding");
-      expect(resolved.mechanicsIR).toBeUndefined();
     });
   }
 
@@ -233,6 +222,10 @@ describe("document structure to closed-world compilation", () => {
       if (!policy.sourceStatementIds.includes(id)) policy.sourceStatementIds.push(id);
       const evidence = data.graph.statements.find((statement) => statement.id === id)!.evidenceRefId;
       if (!policy.claim.evidenceRefs.includes(evidence)) policy.claim.evidenceRefs.push(evidence);
+      if (role === "body") {
+        expect(() => buildCompilerQuestionQueue(data.graph, data.draft)).toThrow("canonical marked clue heading scope");
+        return;
+      }
       data.queue = buildCompilerQuestionQueue(data.graph, data.draft);
       data.draft.readiness.questionQueueHash = data.queue.queueHash;
       const resolved = resolveDraftModule(data.graph, data.draft, data.queue, closureHints(data));
@@ -354,11 +347,11 @@ describe("document structure to closed-world compilation", () => {
     expect(resolved.mechanicsIR).toBeUndefined();
   });
 
-  it("does not treat an omitted discovery location as the mechanics target, and does not let generic prose bind a clue", () => {
+  it("does not treat an omitted discovery location as the mechanics target, and does not let source disposition bind a clue", () => {
     const data = fixture();
     const clue = data.draft.clueCandidates[0]!;
     const specific = data.queue.questions.find((question) => question.kind === "discovery_method" && question.subjectCandidateId === clue.id)!;
-    const prose = data.queue.questions.find((question) => question.kind === "discovery_method" && !question.subjectCandidateId)!;
+    const prose = data.queue.questions.find((question) => question.kind === "source_fact_disposition")!;
     expect(() => parseCompilerHintValue(specific, { clueCandidateId: clue.id, spec: {
       kind: "discovery_method", id: "missing_location", clueId: clue.id, action: "search", target: "scene", targetId: clue.sceneCandidateId,
       onSuccess: [{ kind: "discover_clue", clueId: clue.id }],
@@ -366,7 +359,7 @@ describe("document structure to closed-world compilation", () => {
     expect(() => parseCompilerHintValue(prose, { clueCandidateId: clue.id, locationSceneCandidateId: clue.sceneCandidateId, spec: {
       kind: "discovery_method", id: "prose_cannot_bind", clueId: clue.id, action: "search", target: "scene", targetId: clue.sceneCandidateId,
       onSuccess: [{ kind: "discover_clue", clueId: clue.id }],
-    } })).toThrow("no clue subject");
+    } })).toThrow("undeclared");
   });
 
   it("fails closed for cross-module and duplicate topology declarations without manufacturing a second topology question", () => {

@@ -7,6 +7,7 @@ import {
   ResourceDef, ResourceCategory, Market, MarketEntry, TradeRoute,
   EconomyEvent, EconomyEventType
 } from "./types";
+import type { TradeSystemSnapshot } from "./politico-economy-snapshot";
 
 export class TradeSystem {
   resources: Map<string, ResourceDef> = new Map();
@@ -89,6 +90,52 @@ export class TradeSystem {
     return Array.from(this.markets.values());
   }
 
+  /** Internal persistence primitive. Untrusted snapshots are validated by the engine. */
+  exportForSnapshot(): TradeSystemSnapshot {
+    return {
+      resources: Array.from(this.resources.values()),
+      markets: Array.from(this.markets.values()).map(market => ({
+        id: market.id,
+        name: market.name,
+        location: market.location,
+        controlledBy: market.controlledBy,
+        entries: market.entries,
+        tradeRouteIds: market.tradeRoutes.map(route => route.id),
+        taxRate: market.taxRate,
+        lastUpdateRound: market.lastUpdateRound,
+      })),
+      tradeRoutes: Array.from(this.tradeRoutes.values()),
+      routeMarketMap: Array.from(this.routeMarketMap, ([routeId, markets]) => ({ routeId, ...markets })),
+      events: this.events,
+      round: this.round,
+      eventCounter: this.eventCounter,
+    };
+  }
+
+  /** Internal persistence primitive. Call only with validatePoliticoEconomySnapshot output. */
+  replaceFromSnapshot(snapshot: TradeSystemSnapshot): void {
+    const routes = new Map(snapshot.tradeRoutes.map(route => [route.id, route]));
+    this.resources = new Map(snapshot.resources.map(resource => [resource.id, resource]));
+    this.tradeRoutes = routes;
+    this.markets = new Map(snapshot.markets.map(market => [market.id, {
+      id: market.id,
+      name: market.name,
+      location: market.location,
+      controlledBy: market.controlledBy,
+      entries: market.entries,
+      tradeRoutes: market.tradeRouteIds.map(routeId => routes.get(routeId)!),
+      taxRate: market.taxRate,
+      lastUpdateRound: market.lastUpdateRound,
+    }]));
+    this.routeMarketMap = new Map(snapshot.routeMarketMap.map(link => [link.routeId, {
+      fromMarketId: link.fromMarketId,
+      toMarketId: link.toMarketId,
+    }]));
+    this.events = snapshot.events;
+    this.round = snapshot.round;
+    this.eventCounter = snapshot.eventCounter;
+  }
+
   // 设置价格 / Set or update a resource price in a market
   setPrice(marketId: string, resourceId: string, price: number): void {
     const market = this.markets.get(marketId);
@@ -164,10 +211,10 @@ export class TradeSystem {
   ): TradeRoute | null {
     const fromMarket = this.markets.get(fromMarketId);
     const toMarket = this.markets.get(toMarketId);
-    if (!fromMarket || !toMarket) return null;
+    if (!fromMarket || !toMarket || fromMarketId === toMarketId) return null;
     if (!fromMarket.entries[resourceId] || !toMarket.entries[resourceId]) return null;
 
-    const routeId = `route_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const routeId = this.nextTradeRouteId();
     const route: TradeRoute = {
       id: routeId,
       fromFactionId: fromMarket.controlledBy,
@@ -185,6 +232,22 @@ export class TradeSystem {
     toMarket.tradeRoutes.push(route);
 
     return route;
+  }
+
+  /**
+   * Wall-clock time and ambient entropy are only a convenient route-id prefix,
+   * not a uniqueness authority. Tests, replay tools, and hosts may freeze either
+   * source, so reserve a deterministic suffix whenever that prefix is occupied.
+   */
+  private nextTradeRouteId(): string {
+    const prefix = `route_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    let candidate = prefix;
+    let collision = 0;
+    while (this.tradeRoutes.has(candidate)) {
+      collision++;
+      candidate = `${prefix}_${collision}`;
+    }
+    return candidate;
   }
 
   // 移除贸易路线 / Remove and deactivate a trade route

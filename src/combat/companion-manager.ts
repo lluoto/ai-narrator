@@ -12,12 +12,26 @@ import type { WorldEntity, WorldState, ActionIntent, CompanionConfig, CompanionS
 import type { WorldStateManager } from "../state/world-state-manager";
 import type { AgentMessage } from "../agent/types";
 import { CompanionAgent } from "../agent/companion-agent";
+import {
+  validateCompanionManagerSnapshot,
+  validateCompanionSnapshotWorld,
+  validateLegacyCompanionSnapshots,
+  type CompanionManagerSnapshot,
+  type CompanionSnapshotWorld,
+} from "./companion-manager-snapshot";
 
 // ============================================================
 // 常量
 // ============================================================
 
 const ENTITY_ID_PREFIX = "companion_";
+
+type LegacySnapshotWorld = CompanionSnapshotWorld & Pick<WorldStateManager, "killEntity" | "upsertEntity">;
+
+function canRestoreLegacySnapshot(world: CompanionSnapshotWorld): world is LegacySnapshotWorld {
+  const candidate = world as Partial<LegacySnapshotWorld>;
+  return typeof candidate.killEntity === "function" && typeof candidate.upsertEntity === "function";
+}
 
 // ============================================================
 // 队友管理器
@@ -87,9 +101,11 @@ export class CompanionManager {
   /**
    * 标记已邀请（防止重复播招商文本）
    */
-  markInvited(id: string): void {
+  markInvited(id: string): boolean {
     const state = this.companions.get(id);
-    if (state) state.invited = true;
+    if (!state || !state.active || state.invited) return false;
+    state.invited = true;
+    return true;
   }
 
   /**
@@ -301,8 +317,32 @@ export class CompanionManager {
   // ==========================================================
 
   /**
-   * 对指定队友生成快照（需外部提供 HP）
+   * Export every registered CompanionState as a detached versioned JSON
+   * document. World-owned entity data remains in WorldStateSnapshot.
    */
+  exportSnapshot(): CompanionManagerSnapshot {
+    return validateCompanionManagerSnapshot({
+      kind: "companion-manager",
+      schemaVersion: 1,
+      companions: Array.from(this.companions.entries()).map(([id, state]) => ({
+        id,
+        config: state.config,
+        entityId: state.entityId,
+        behavior: state.behavior,
+        active: state.active,
+        inventory: state.inventory,
+        morale: state.morale,
+        invited: state.invited,
+        control: state.control,
+        resolveState: state.resolveState,
+        resolveTurnsLeft: state.resolveTurnsLeft,
+      })),
+      actedThisRound: Array.from(this.actedThisRound),
+      lastRefusal: this.lastRefusal,
+    });
+  }
+
+  /** 对指定队友生成旧版活跃队友快照（需外部提供 HP）。 */
   private snapshotOne(configId: string, hp: number, maxHp: number): CompanionSnapshot | null {
     const state = this.companions.get(configId);
     if (!state || !state.active) return null;
@@ -338,7 +378,46 @@ export class CompanionManager {
    * 还原快照（重置全部活跃队友的状态）
    * 用于副本加载 / 重连恢复
    */
-  restoreSnapshot(snapshots: CompanionSnapshot[], world: WorldStateManager): void {
+  restoreSnapshot(input: unknown, world: CompanionSnapshotWorld): void {
+    if (Array.isArray(input)) {
+      if (!canRestoreLegacySnapshot(world)) {
+        throw new Error("Legacy companion snapshots require a mutable WorldStateManager");
+      }
+      this.restoreLegacySnapshot(validateLegacyCompanionSnapshots(input), world);
+      return;
+    }
+
+    const snapshot = validateCompanionManagerSnapshot(input);
+    validateCompanionSnapshotWorld(snapshot, world);
+
+    const companions = new Map<string, CompanionState>();
+    const agents = new Map<string, CompanionAgent>();
+    for (const entry of snapshot.companions) {
+      const state: CompanionState = {
+        config: entry.config,
+        entityId: entry.entityId,
+        behavior: entry.behavior,
+        active: entry.active,
+        inventory: entry.inventory,
+        morale: entry.morale,
+        invited: entry.invited,
+        control: entry.control,
+        resolveState: entry.resolveState,
+        resolveTurnsLeft: entry.resolveTurnsLeft,
+      };
+      companions.set(entry.id, state);
+      if (state.active) agents.set(entry.id, new CompanionAgent(state.config, state.entityId));
+    }
+
+    // All validation and construction happened above: replace memory in one step.
+    this.companions = companions;
+    this.agents = agents;
+    this.actedThisRound = new Set(snapshot.actedThisRound);
+    this.lastRefusal = snapshot.lastRefusal;
+  }
+
+  /** Legacy active-only restore; its historical world-mutating behavior is retained for compatibility. */
+  private restoreLegacySnapshot(snapshots: CompanionSnapshot[], world: LegacySnapshotWorld): void {
     // 清空现有活跃状态（保留配置注册）
     for (const [_id, state] of this.companions) {
       if (state.active) {

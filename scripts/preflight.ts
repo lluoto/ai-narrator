@@ -28,9 +28,11 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "fs";
 import { join } from "path";
 import { spawnSync } from "child_process";
+import { captureProcess } from "../src/diagnostics/process-capture";
+import { persistPreflightTestEvidence } from "../src/diagnostics/preflight-raw-evidence";
 import {
   findTruncatedBlocks, findPlaceholderResidue, findReverseImports, findShellRisks,
-  judgeProcess, parseTestOutput, judgeTestCount,
+  judgeProcess, parseTestOutput, judgeTestCount, boundedBunFailureDiagnostics,
   referencedScripts, judgeScriptRefs, generatedDocs, resolveRef,
   referencedRepoPaths, LIVE_DOCS,
   architecturePathRefs, ARCHITECTURE_DOCS,
@@ -42,6 +44,7 @@ import {
 const quick = process.argv.includes("--quick");
 const problems: string[] = [];
 const notes: string[] = [];
+const testFailureDiagnostics: string[] = [];
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".codegraph", ".superpowers"]);
 
@@ -306,10 +309,32 @@ if (!tscVerdict.ok) {
 // 「只打印当前条数」不是检查 —— 跟什么比？有基线才有回归。
 const BASELINE_PATH = "docs/test-baseline.json";
 if (!quick) {
-  const t = spawnSync("bun", ["test"], { encoding: "utf8", shell: true });
+  // Full-run fixtures share filesystem, SQLite, and CPU-heavy PDF work. The
+  // runner-level per-test default must be explicit on Bun's CLI; a preload
+  // cannot configure other test files. The verified 200-receipt filesystem
+  // fixture declares a bounded 30s local limit, so the CLI cap cannot be
+  // shorter. Keep one reproducible worker and a finite 30s runner ceiling.
+  const t = await captureProcess("bun", ["test", "--parallel=1", "--timeout", "30000"]);
+  try {
+    const rawEvidenceDirectory = persistPreflightTestEvidence(t);
+    notes.push(`bun test 原始 stdout/stderr 与退出证据保存在 ${rawEvidenceDirectory}（本地忽略目录，不代替门禁判据）`);
+  } catch {
+    // Raw evidence is required for a reproducible diagnosis. Do not expose a
+    // filesystem error's private detail or pretend a failed save was success.
+    problems.push("bun test 原始证据保存失败 —— 本次门禁不能报告通过");
+  }
   const text = (t.stdout ?? "") + "\n" + (t.stderr ?? "");
   const verdict = judgeProcess("bun test", t);
   const counts = parseTestOutput(text);
+
+  if (!verdict.ok || (counts.failed ?? 0) > 0) {
+    const diagnostics = boundedBunFailureDiagnostics(text);
+    if (diagnostics.length) {
+      testFailureDiagnostics.push(...diagnostics);
+    } else {
+      problems.push("bun test 失败，但 Bun 输出中没有可解析的失败用例名（未重放完整测试输出）");
+    }
+  }
 
   if (!existsSync(BASELINE_PATH)) {
     problems.push(`缺少测试基线 ${BASELINE_PATH} —— 没有基线就没有回归检查；先跑一次并写入 {"tests":N,"files":M}`);
@@ -407,6 +432,10 @@ if (!quick) {
 // ── 输出 ──
 console.log(problems.length === 0 ? "✓ preflight 通过" : `✗ preflight 发现 ${problems.length} 个问题`);
 for (const p of problems) console.log("  " + p);
+if (testFailureDiagnostics.length) {
+  console.log("\n  bun test bounded failure context:");
+  for (const line of testFailureDiagnostics) console.log("    " + line);
+}
 if (notes.length) {
   console.log("");
   for (const n of notes) console.log("  · " + n);

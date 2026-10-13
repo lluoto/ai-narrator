@@ -52,6 +52,61 @@ export interface ModuleData {
   runtime?: ModuleRuntimeConfig;
 }
 
+/**
+ * A ModuleData value that is eligible for the legacy direct runtime loader.
+ *
+ * Ingest and compiler projection values deliberately remain plain ModuleData:
+ * their presentation data is not an instruction to mutate a live session.
+ */
+export type RuntimeModuleData = ModuleData & { runtime: ModuleRuntimeConfig };
+
+function isRuntimeModuleRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonBlankRuntimeText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/** Strict runtime boundary: JSON drafts and compiler projections fail closed. */
+export function isRuntimeModuleData(value: unknown): value is RuntimeModuleData {
+  if (!isRuntimeModuleRecord(value)
+    || !isNonBlankRuntimeText(value.id)
+    || !isNonBlankRuntimeText(value.title)
+    || !isNonBlankRuntimeText(value.version)
+    || value.ruleset !== "cosmic-horror"
+    || !isNonBlankRuntimeText(value.era)
+    || !isNonBlankRuntimeText(value.summary)
+    || !Array.isArray(value.scenes)
+    || !Array.isArray(value.npcs)
+    || !Array.isArray(value.endings)
+    || !Array.isArray(value.items)
+    || !isRuntimeModuleRecord(value.meta)
+    || !isNonBlankRuntimeText(value.meta.playerCount)
+    || !isNonBlankRuntimeText(value.meta.expectedDuration)
+    || !Array.isArray(value.meta.triggerWarnings)
+    || !isRuntimeModuleRecord(value.runtime)) return false;
+
+  const runtime = value.runtime;
+  const identity = runtime.sourceIdentity;
+  const activation = runtime.activation;
+  return isRuntimeModuleRecord(identity)
+    && identity.id === value.id
+    && isNonBlankRuntimeText(identity.name)
+    && isNonBlankRuntimeText(identity.version)
+    && isNonBlankRuntimeText(identity.description)
+    && isRuntimeModuleRecord(activation)
+    && ["manual", "location_enter", "item_found", "read_tome", "san_threshold"].includes(activation.type as string)
+    && isNonBlankRuntimeText(activation.condition)
+    && ["easy", "medium", "hard", "nightmare"].includes(runtime.difficulty as string);
+}
+
+export function assertRuntimeModuleData(value: unknown): asserts value is RuntimeModuleData {
+  if (!isRuntimeModuleData(value)) {
+    throw new Error("RuntimeModuleData requires a complete ModuleData shape and a validated runtime configuration");
+  }
+}
+
 /** 一条改写记录：原文、结果、理由，三者缺一不可 */
 export interface Provenance {
   /**
@@ -146,8 +201,13 @@ export interface TrapMechanics {
   detect?: {
     skill: string;
     difficulty: "regular" | "hard" | "extreme";
-    /** 夜晚或其他条件下的惩罚骰数（0 = 无惩罚） */
+    /** 无条件惩罚骰数（0 = 无惩罚）。保留旧语义。 */
     penaltyDice?: number;
+    /**
+     * 仅当共享 GameTime 处于夜间（dusk/evening/night/late_night）时额外加入的惩罚骰。
+     * 与 penaltyDice 相加后仍由 check()/CoC 规则限制为最多两个。
+     */
+    nightPenaltyDice?: number;
     /** 有特定背景（如军事经历）可改用此技能 */
     alternativeSkill?: string;
     alternativeBackground?: string;
@@ -243,6 +303,10 @@ export interface Scene {
    */
   order?: number;
   description: string; // KP 用的场景描述
+  /** Source-declared illumination, retained by the direct runtime loader. */
+  lighting?: string;
+  /** Source-declared environmental hazards, retained by the direct runtime loader. */
+  dangers?: string[];
   /** 场景中的可交互线索 */
   clues: Clue[];
   /** 此场景中出现的 NPC */
@@ -283,6 +347,10 @@ export interface Clue {
   id: string;
   name: string;
   description: string;
+  /** Source taxonomy retained when a local rule generator has one. */
+  sourceType?: string;
+  /** Source taxonomy retained when a local rule generator has one. */
+  category?: string;
   /** 找到线索的方法 */
   findMethods: FindMethod[];
   /** 找到后的揭示文本 */
@@ -347,6 +415,11 @@ interface FindMethod {
 
 /** 场景连接 */
 export interface SceneConnection {
+  /**
+   * Stable identity for a compiler-projected edge.  Legacy hand-authored
+   * ModuleData may omit it, but a canonical compiled projection always has it.
+   */
+  connectionId?: string;
   targetSceneId: string;
   /** 解锁条件描述 */
   condition: string;

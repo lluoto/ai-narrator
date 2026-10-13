@@ -3,15 +3,17 @@
 // This intentionally does not import deriveMythosModule or MythosModuleLoader.
 // It reads ModuleData's narrative structure plus its runtime group directly.
 
-import type { Clue, ModuleData, ModuleItem, ModuleNPC, SceneConnection } from "./types";
-import type {
-  ModuleRuntimeConfig,
-  RuntimeItemPlacement,
-  RuntimeModuleHook,
-  RuntimeModuleReward,
-  RuntimeModuleSpell,
-  RuntimeModuleTome,
-  RuntimeNpcSnapshot,
+import { assertRuntimeModuleData, type Clue, type ModuleItem, type ModuleNPC, type RuntimeModuleData, type SceneConnection } from "./types";
+import {
+  normalizeRuntimeModulePickupOrigins,
+  normalizeRuntimeModuleTomes,
+  type ModuleRuntimeConfig,
+  type RuntimeItemPlacement,
+  type RuntimeModuleHook,
+  type RuntimeModuleReward,
+  type RuntimeModuleSpell,
+  type RuntimeModuleTome,
+  type RuntimeNpcSnapshot,
 } from "./runtime-types";
 
 export interface RuntimeSceneExit {
@@ -20,7 +22,7 @@ export interface RuntimeSceneExit {
 }
 
 export interface ModuleDataRuntimeHost {
-  registerScene(scene: { id: string; name: string; description: string; exits: RuntimeSceneExit[] }): void;
+  registerScene(scene: { id: string; name: string; description: string; lighting?: string; dangers?: string[]; exits: RuntimeSceneExit[] }): void;
   registerRuntimeNpc(npc: ModuleNPC, runtime: RuntimeNpcSnapshot): void;
   registerNarrativeNpc(npc: ModuleNPC): void;
   registerRichClue(sceneId: string, clue: Clue, sanCost?: string): void;
@@ -42,10 +44,10 @@ export interface ModuleDataLoadResult {
   name: string;
   entryScene: string | null;
   lines: string[];
-  narrative: Pick<ModuleData, "endings" | "epilogues" | "prologue" | "partySetup" | "narrative">;
+  narrative: Pick<RuntimeModuleData, "endings" | "epilogues" | "prologue" | "partySetup" | "narrative">;
 }
 
-function runtimeOf(module: ModuleData): ModuleRuntimeConfig {
+function runtimeOf(module: RuntimeModuleData): ModuleRuntimeConfig {
   const runtime = module.runtime;
   if (!runtime?.activation || !runtime.difficulty || !runtime.sourceIdentity) {
     throw new Error("ModuleData 缺少步骤 5B 迁入的运行配置");
@@ -61,11 +63,56 @@ function assertUnique(values: string[], label: string): void {
   }
 }
 
-function validateBeforeHostWrites(module: ModuleData): ModuleRuntimeConfig {
+// These are the two verified narrative-display/runtime-entity pairs in the
+// current Barn source.  They are deliberately complete pairs, not a general
+// parenthetical alias: “菲碧·特里坎（冒牌者）” must never bind 菲碧's runtime.
+function hasVerifiedRuntimeNpcCounterpart(npc: ModuleNPC, snapshot: RuntimeNpcSnapshot): boolean {
+  if (npc.name === snapshot.sourceName) return true;
+  return (npc.name === "食尸鬼（可选）" && snapshot.sourceName === "食尸鬼")
+    || (npc.name === "Mi-Go（来自尤格斯的真菌）" && snapshot.sourceName === "Mi-Go");
+}
+
+function assertModuleNpcKnowledge(npc: ModuleNPC): void {
+  // `assertRuntimeModuleData` establishes the broad package shape, but this
+  // field becomes an LLM factual source below.  Do not permit a malformed
+  // value to be spread into characters or fall back to a different profile.
+  const knowledge: unknown = (npc as unknown as { knowledge?: unknown }).knowledge;
+  if (!Array.isArray(knowledge) || knowledge.some((fact) => typeof fact !== "string")) {
+    throw new Error(`ModuleNPC.knowledge must be an array of strings: ${npc.id}`);
+  }
+}
+
+/**
+ * Direct-loader validation is deliberately exported for the session package
+ * dispatcher. It imports no compiler types, keeping ModuleData independent.
+ */
+export function validateRuntimeModuleDataForInstall(input: unknown): RuntimeModuleData {
+  assertRuntimeModuleData(input);
+  const module = input;
   const runtime = runtimeOf(module);
+  normalizeRuntimeModuleTomes((runtime as unknown as Record<string, unknown>).tomes);
+  const pickupOrigins = normalizeRuntimeModulePickupOrigins({
+    tomes: (runtime as unknown as Record<string, unknown>).tomes,
+    itemPlacements: (runtime as unknown as Record<string, unknown>).itemPlacements,
+    richItems: module.items,
+  });
   assertUnique(module.scenes.map((scene) => scene.id), "Scene.id");
   const sceneIds = new Set(module.scenes.map((scene) => scene.id));
+  for (const origin of pickupOrigins) {
+    if (!sceneIds.has(origin.sceneId)) {
+      throw new Error(`runtime pickup origin does not name a declared scene: ${origin.name}`);
+    }
+  }
+  if (runtime.entrySceneId !== undefined && !sceneIds.has(runtime.entrySceneId)) {
+    throw new Error(`runtime entrySceneId does not name a declared scene: ${runtime.entrySceneId}`);
+  }
   for (const scene of module.scenes) {
+    if (scene.lighting !== undefined && (typeof scene.lighting !== "string" || scene.lighting.trim().length === 0)) {
+      throw new Error(`Scene.lighting is invalid for ${scene.id}`);
+    }
+    if (scene.dangers !== undefined && (!Array.isArray(scene.dangers) || scene.dangers.some((danger) => typeof danger !== "string" || danger.trim().length === 0))) {
+      throw new Error(`Scene.dangers is invalid for ${scene.id}`);
+    }
     for (const connection of scene.connections) {
       if (!sceneIds.has(connection.targetSceneId)) {
         throw new Error(`Scene.connection 悬空：${scene.id} -> ${connection.targetSceneId}`);
@@ -75,10 +122,29 @@ function validateBeforeHostWrites(module: ModuleData): ModuleRuntimeConfig {
   assertUnique(module.npcs.map((npc) => npc.id), "ModuleNPC.id");
   assertUnique(module.items.map((item) => item.id), "ModuleItem.id");
   assertUnique(module.scenes.flatMap((scene) => scene.clues.map((clue) => clue.id)), "Clue.id");
+  for (const npc of module.npcs) assertModuleNpcKnowledge(npc);
+
+  // A nested runtime snapshot supplies world/combat identity, while its
+  // enclosing ModuleNPC owns the narrative facts.  `sourceId` deliberately
+  // lives in the world-entity domain and need not equal ModuleNPC.id; name
+  // and scene are the shared counterpart binding.  Refuse a mismatch before
+  // the first host write rather than letting one NPC inherit another's facts.
+  for (const npc of module.npcs) {
+    const snapshot = npc.runtime;
+    if (snapshot && (!hasVerifiedRuntimeNpcCounterpart(npc, snapshot) || snapshot.sceneId !== npc.sceneId)) {
+      throw new Error(`runtime NPC source binding conflicts: ${npc.id}`);
+    }
+  }
 
   const runtimeSnapshots = module.npcs.flatMap((npc) => npc.runtime ? [npc.runtime] : []);
   const sourceIds = runtimeSnapshots.map((snapshot) => snapshot.sourceId);
   assertUnique(sourceIds, "runtime NPC sourceId");
+  for (const snapshot of runtimeSnapshots) {
+    if (snapshot.status !== undefined && (!Array.isArray(snapshot.status)
+      || snapshot.status.some((status) => typeof status !== "string" || status.trim().length === 0))) {
+      throw new Error(`runtime NPC status is invalid for ${snapshot.sourceId}`);
+    }
+  }
   const order = runtime.runtimeNpcOrder ?? [];
   assertUnique(order, "runtimeNpcOrder");
   const snapshotIds = new Set(sourceIds);
@@ -88,7 +154,7 @@ function validateBeforeHostWrites(module: ModuleData): ModuleRuntimeConfig {
   const orderIds = new Set(order);
   const unconsumed = sourceIds.filter((sourceId) => !orderIds.has(sourceId));
   if (unconsumed.length > 0) throw new Error(`runtime snapshot 未被 order 消费：${unconsumed.join(", ")}`);
-  return runtime;
+  return module;
 }
 
 function toRuntimeExit(connection: SceneConnection): RuntimeSceneExit {
@@ -114,18 +180,20 @@ export class ModuleDataRuntimeLoader {
     completed.add(key);
   }
 
-  import(module: ModuleData): ModuleDataLoadResult {
+  import(module: RuntimeModuleData): ModuleDataLoadResult {
     if (this.imported.has(module.id)) {
       return {
         id: module.id,
         name: module.title,
-        entryScene: module.scenes[0]?.id ?? null,
+        entryScene: module.runtime.entrySceneId ?? module.scenes[0]?.id ?? null,
         lines: [`模组「${module.title}」已导入。`],
         narrative: pickNarrative(module),
       };
     }
     // All structural checks happen before the first host write.
-    const runtime = validateBeforeHostWrites(module);
+    const validated = validateRuntimeModuleDataForInstall(module);
+    const runtime = validated.runtime;
+    const tomes = normalizeRuntimeModuleTomes((runtime as unknown as Record<string, unknown>).tomes);
     const lines = [`【统一模组：${module.title}】`, `难度：${runtime.difficulty} | ${module.summary}`];
 
     module.scenes.forEach((scene, index) => {
@@ -133,6 +201,8 @@ export class ModuleDataRuntimeLoader {
         id: scene.id,
         name: scene.name,
         description: scene.description,
+        ...(scene.lighting !== undefined ? { lighting: scene.lighting } : {}),
+        ...(scene.dangers !== undefined ? { dangers: [...scene.dangers] } : {}),
         exits: scene.connections.map(toRuntimeExit),
       }));
     });
@@ -151,7 +221,7 @@ export class ModuleDataRuntimeLoader {
     }));
     lines.push(`注册 ${module.scenes.flatMap((scene) => scene.clues).length} 条丰富线索`);
 
-    (runtime.tomes ?? []).forEach((tome, index) => this.runOperation(module.id, `tome:${index}:${tome.name}`, () => this.host.registerTome(tome)));
+    tomes.forEach((tome, index) => this.runOperation(module.id, `tome:${index}:${tome.name}`, () => this.host.registerTome(tome)));
     (runtime.itemPlacements ?? []).forEach((item, index) => this.runOperation(module.id, `placement:${index}:${item.name}`, () => this.host.registerItemPlacement(item)));
     module.items.forEach((item, index) => this.runOperation(module.id, `item:${index}:${item.id}`, () => this.host.registerRichItem(item)));
     (runtime.spells ?? []).forEach((spell, index) => this.runOperation(module.id, `spell:${index}:${spell.name}`, () => this.host.registerSpell(spell)));
@@ -177,14 +247,14 @@ export class ModuleDataRuntimeLoader {
     return {
       id: module.id,
       name: module.title,
-      entryScene: module.scenes[0]?.id ?? null,
+      entryScene: module.runtime.entrySceneId ?? module.scenes[0]?.id ?? null,
       lines,
       narrative: pickNarrative(module),
     };
   }
 }
 
-function pickNarrative(module: ModuleData): ModuleDataLoadResult["narrative"] {
+function pickNarrative(module: RuntimeModuleData): ModuleDataLoadResult["narrative"] {
   return {
     endings: module.endings,
     epilogues: module.epilogues,

@@ -17,6 +17,7 @@ import {
   ConstraintEngine,
   ConstraintPriority,
   DEFAULT_CONSTRAINTS,
+  checkNarrationText,
 } from "../world/world-constraint";
 import {
   worldModelItemFilter,
@@ -221,6 +222,34 @@ describe("ConstraintEngine.checkNarration", () => {
     expect(
       checkNarrationText("冰箱里面空荡荡的，只有几层隔板和后壁。", { undiscoveredClueKeys: ["冰箱"] }),
     ).not.toBeNull();
+  });
+
+  it("compiled narration may use a reviewed exact technology term without weakening other narration guards", () => {
+    // The normal, legacy caller remains conservative when it does not know a
+    // year.  Only the compiled host opts into skipping year-ranged rules for
+    // an unknown reviewed era.
+    expect(checkNarrationText("电脑亮着冷光。")).not.toBeNull();
+    expect(checkNarrationText("电脑亮着冷光。", { year: 1980 } as any)).toBeNull();
+    expect(checkNarrationText("电脑亮着冷光。", { skipYearRangeWhenUnknown: true } as any)).toBeNull();
+
+    // A source-reviewed current fact may support precisely the reviewed term,
+    // not a suffix/compound containing it and not another modern device.
+    const reviewedComputer = { year: 1893, sourceReviewedTechnologyTerms: ["电脑"] };
+    expect(checkNarrationText("电脑亮着冷光。", reviewedComputer as any)).toBeNull();
+    expect(checkNarrationText("笔记本电脑亮着冷光。", reviewedComputer as any)).not.toBeNull();
+    expect(checkNarrationText("电脑旁放着一部手机。", reviewedComputer as any)).not.toBeNull();
+
+    // This is an exact source-reviewed empty-refrigerator revelation, but a
+    // technology allowance must never bypass the independent hidden-clue
+    // guard while the refrigerator remains undiscovered.
+    expect(checkNarrationText("冰箱空荡荡，只剩几层隔板。", {
+      ...reviewedComputer,
+      undiscoveredClueKeys: ["冰箱"],
+    } as any)).not.toBeNull();
+    expect(checkNarrationText("冰箱空无一物。", {
+      ...reviewedComputer,
+      undiscoveredClueKeys: ["冰箱"],
+    } as any)).not.toBeNull();
   });
 });
 

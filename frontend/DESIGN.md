@@ -1,4 +1,4 @@
-# AI TRPG Frontend Design System
+# AI Narrator Frontend Design System
 
 ## 1. Atmosphere & Identity
 

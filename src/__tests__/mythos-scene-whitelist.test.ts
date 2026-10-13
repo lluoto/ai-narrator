@@ -25,8 +25,15 @@ function expectedWhitelist(module: MythosModule): Set<string> {
 function createMockHost(): MythosModuleHost & { registeredScenes: string[]; registeredHooks: number } {
   const registeredScenes: string[] = [];
   let registeredHooks = 0;
+  const sceneItems = new Map<string, string[]>();
   return {
-    mythosSpells: new Map(), knownMythosSpells: [], sceneItems: new Map(), itemDescriptions: new Map(),
+    registerSpell() { return true; },
+    registerTome(tome) {
+      const items = sceneItems.get(tome.sceneId) ?? [];
+      if (!items.includes(tome.name)) items.push(tome.name);
+      sceneItems.set(tome.sceneId, items);
+    },
+    sceneItems, itemDescriptions: new Map(),
     world: { upsertEntity() {}, logEvent() {} },
     registerScene(sceneId: string) { registeredScenes.push(sceneId); },
     registerHook() { registeredHooks++; },

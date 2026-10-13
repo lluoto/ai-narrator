@@ -67,7 +67,8 @@ describe("declareIntentPath —— 起手声明，从日志能唯一反推走的
     infoSpy.mockRestore();
     warnSpy.mockRestore();
 
-    expect(intentLLMConfigured()).toBe(true); // 前提：这局确实接上了
+    // 会话用自己的 client；这里仍为 false 正是 CLI 全局状态没有被会话污染的证据。
+    expect(intentLLMConfigured()).toBe(false);
     expect(infoCalls.length).toBe(1);
     expect(warnCalls.length).toBe(0);
     expect(infoCalls[0][1]).toContain("LLM");

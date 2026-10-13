@@ -32,7 +32,7 @@
 
 | 层 | 文件 | 职责 | 状态 |
 |---|---|---|---|
-| 原著世界内容库 | `poc/src/rules/mythos-expansion.ts` | 神话生物、典籍、法术等跨模组内容 | 仅 prompt 层引用，未接入剧本引擎 |
+| 原著世界内容库 | `poc/src/rules/mythos-expansion.ts` | 神话生物、典籍、法术等跨模组内容 | 通用目录由 `createMythosEntity()` 明确消费；模组加载保留模组自身遭遇数值，不让目录覆写 |
 | 摄取中间表示 | `poc/src/module/types.ts` 的 `ModuleData` | PDF 读取模块应产出的权威结构 | 已接入 |
 | 运行时导入容器 | `poc/src/rules/mythos-module.ts` 的 `MythosModule` | legacy activation、loader、hooks、initialEffects | 已接入；服务 Arkham/InnsMouth，不承载谷仓 |
 

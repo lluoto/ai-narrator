@@ -11,6 +11,7 @@ import {
   maskSource, findTruncatedBlocks, findPlaceholderResidue,
   scanImports, importPointsTo, findReverseImports,
   findShellRisks, judgeProcess, parseTestOutput, judgeTestCount,
+  boundedBunFailureDiagnostics, BUN_FAILURE_CONTEXT_LIMITS,
   referencedScripts, judgeScriptRefs, generatedDocs, resolveRef,
   referencedRepoPaths, LIVE_DOCS,
   architecturePathRefs, ARCHITECTURE_DOCS,
@@ -705,6 +706,13 @@ describe("检查 8 · 丢掉的 boolean 返回值", () => {
     ].join("\n");
     expect(findDroppedReturns("move-util.ts", iface, new Set(["isSceneVisited", "sceneExists"]))).toEqual([]);
   });
+
+  test("真实源码中不同词法作用域的 helper 不会因全局 boolean 名称同名而误报", () => {
+    const scanner = readFileSync(join(import.meta.dir, "..", "diagnostics", "source-scan.ts"), "utf8");
+    const registry = readFileSync(join(import.meta.dir, "..", "world", "compiled-world-model-binding-registry.ts"), "utf8");
+    const names = new Set([...boolReturningNames(scanner), ...boolReturningNames(registry)]);
+    expect(findDroppedReturns("source-scan.ts", scanner, names)).toEqual([]);
+  });
 });
 
 describe("检查 8 · 参数列表带嵌套括号（回调类型参数）——原判据的假绿来源", () => {
@@ -773,7 +781,7 @@ describe("检查 8 · 参数列表带嵌套括号（回调类型参数）——�
     // 修复的问题——boolReturningNames 只扫 game-session.ts 这一份源码，
     // 扫不出定义在别处的方法：
     //   setActiveScene    —— 定义在 src/state/world-state-manager.ts:411，
-    //                        game-session.ts 里只有调用点 `this.world.setActiveScene(...)`
+//                        game-session.ts 里只有场景激活委托的调用点
     //   getPlayerInventory —— 同样定义在 world-state-manager.ts:213，
     //                        而且它返回 `string[]`，根本不是 boolean
     // 这两个不放进下面的断言列表，放了就是断言一件不成立的事。
@@ -911,5 +919,68 @@ describe("检查 6 · 测试条数基线", () => {
     const v = judgeTestCount({ tests: 1341, files: 66, passed: 1302, skipped: 39, failed: 0 }, strict);
     expect(v.problems).toContain("测试通过数变化：1302 ≠ 基线 1309");
     expect(v.problems).toContain("测试跳过数变化：39 ≠ 基线 32");
+  });
+});
+
+describe("preflight · Bun failure context", () => {
+  test("keeps a bounded diagnostic neighbourhood for every reported failure", () => {
+    const unrelated = "ordinary suite log that must not be replayed";
+    const output = [
+      ...Array.from({ length: 80 }, () => unrelated),
+      "error: expect(received).toBe(expected)",
+      "Expected: \"open\"",
+      "Received: \"closed\"",
+      "      at src/__tests__/door.test.ts:41:19",
+      "(fail) gate opens after a key [2ms]",
+      ...Array.from({ length: 80 }, () => unrelated),
+      "error: child process exited with code 17",
+      "      at spawnChild (src/__tests__/child.test.ts:9:3)",
+      "(fail) child failure is surfaced [3ms]",
+      " 2 fail",
+    ].join("\n");
+
+    const diagnostics = boundedBunFailureDiagnostics(output);
+    const rendered = diagnostics.join("\n");
+
+    expect(rendered).toContain("gate opens after a key");
+    expect(rendered).toContain("child failure is surfaced");
+    expect(rendered).toContain("Expected: \"open\"");
+    expect(rendered).toContain("Received: \"closed\"");
+    expect(rendered).toContain("child process exited with code 17");
+    expect(rendered).not.toContain(unrelated);
+    expect(diagnostics.length).toBeLessThanOrEqual(BUN_FAILURE_CONTEXT_LIMITS.maxLines);
+    expect(Buffer.byteLength(rendered, "utf8")).toBeLessThanOrEqual(BUN_FAILURE_CONTEXT_LIMITS.maxBytes);
+  });
+
+  test("does not silently drop an identified failure whose nearby output has no diagnostic lines", () => {
+    const diagnostics = boundedBunFailureDiagnostics("(fail) bare failing case [1ms]");
+    expect(diagnostics.join("\n")).toContain("bare failing case");
+    expect(diagnostics.join("\n")).toContain("no recognized diagnostic lines");
+  });
+
+  test("reserves bounded output for each failure when an assertion line is enormous", () => {
+    const hugeError = `error: ${"界".repeat(10_000)}`;
+    const output = Array.from({ length: 5 }, (_, index) => [
+      hugeError,
+      `(fail) failure ${index} [1ms]`,
+    ].join("\n")).join("\n");
+    const rendered = boundedBunFailureDiagnostics(output).join("\n");
+
+    expect(rendered).toContain("failure 0");
+    expect(rendered).toContain("failure 1");
+    expect(rendered).toContain("failure 2");
+    expect(rendered).not.toContain("failure 3");
+    expect(Buffer.byteLength(rendered, "utf8")).toBeLessThanOrEqual(BUN_FAILURE_CONTEXT_LIMITS.maxBytes);
+    expect(rendered.split("\n").length).toBeLessThanOrEqual(BUN_FAILURE_CONTEXT_LIMITS.maxLines);
+  });
+
+  test("keeps bounded child-process diagnostics even when Bun did not print a failure name", () => {
+    const diagnostics = boundedBunFailureDiagnostics([
+      "error: spawn child ENOENT",
+      "    at launch (runner.ts:12:5)",
+      "bun test aborted before the summary",
+    ].join("\n"));
+    expect(diagnostics.join("\n")).toContain("Bun test process failure");
+    expect(diagnostics.join("\n")).toContain("spawn child ENOENT");
   });
 });

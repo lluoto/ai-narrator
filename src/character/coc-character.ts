@@ -6,6 +6,7 @@ import { calcDamageBonus, CoCEngine, type CoCCheckResult } from "../rules/coc-en
 import type { CharacterArchetype } from "./character-factory";
 import { ALL_ARCHETYPES } from "./character-factory";
 import { buildBaseBackgroundProfile } from "./background-profile";
+import { drawRandomUnit, type RandomUnit } from "./random-unit";
 
 // ============================================================
 // 类型定义
@@ -253,28 +254,28 @@ export interface CoCGeneratedCharacter {
 // ============================================================
 
 /** 生成 3d6×5 结果 */
-function roll3d6x5(): number {
-  const d6 = () => Math.floor(Math.random() * 6) + 1;
+function roll3d6x5(randomUnit: RandomUnit = Math.random): number {
+  const d6 = () => Math.floor(drawRandomUnit(randomUnit) * 6) + 1;
   return (d6() + d6() + d6()) * 5;
 }
 
 /** 生成 2d6+6×5 结果 */
-function roll2d6p6x5(): number {
-  const d6 = () => Math.floor(Math.random() * 6) + 1;
+function roll2d6p6x5(randomUnit: RandomUnit = Math.random): number {
+  const d6 = () => Math.floor(drawRandomUnit(randomUnit) * 6) + 1;
   return (d6() + d6() + 6) * 5;
 }
 
 /** 随机投骰生成 8 项核心属性 */
-function rollAttributes(): Record<CoCAttribute, number> {
+function rollAttributes(randomUnit: RandomUnit = Math.random): Record<CoCAttribute, number> {
   return {
-    strength: roll3d6x5(),
-    constitution: roll3d6x5(),
-    size: roll2d6p6x5(),
-    dexterity: roll3d6x5(),
-    appearance: roll3d6x5(),
-    intelligence: roll2d6p6x5(),
-    power: roll3d6x5(),
-    education: roll2d6p6x5(),
+    strength: roll3d6x5(randomUnit),
+    constitution: roll3d6x5(randomUnit),
+    size: roll2d6p6x5(randomUnit),
+    dexterity: roll3d6x5(randomUnit),
+    appearance: roll3d6x5(randomUnit),
+    intelligence: roll2d6p6x5(randomUnit),
+    power: roll3d6x5(randomUnit),
+    education: roll2d6p6x5(randomUnit),
   };
 }
 
@@ -285,6 +286,7 @@ function pointBuyAttributes(
   maxValue: number = 90,
   priorityAttrs?: string[], // archetype-recommended priority attributes
   minAttrs?: Record<string, number>, // archetype-required minimum attributes
+  randomUnit: RandomUnit = Math.random,
 ): Record<CoCAttribute, number> {
   const attrs: Record<CoCAttribute, number> = {
     strength: minValue, constitution: minValue, size: minValue,
@@ -308,7 +310,7 @@ function pointBuyAttributes(
   }
 
   // Weighted random distribution: priority attributes get 2× weight
-  const order: CoCAttribute[] = [...COC_ATTRIBUTES].sort(() => Math.random() - 0.5);
+  const order: CoCAttribute[] = [...COC_ATTRIBUTES].sort(() => drawRandomUnit(randomUnit) - 0.5);
   while (remaining > 0) {
     for (const attr of order) {
       if (remaining <= 0) break;
@@ -317,7 +319,7 @@ function pointBuyAttributes(
       // Priority attributes get larger allocation chunks
       const maxChunk = priorityAttrs?.includes(attr) ? 15 : 10;
       const add = Math.min(
-        Math.floor(Math.random() * Math.min(space, maxChunk)) + 1,
+        Math.floor(drawRandomUnit(randomUnit) * Math.min(space, maxChunk)) + 1,
         space,
         remaining
       );
@@ -446,14 +448,14 @@ export function calcCoCMove(strength: number, dexterity: number, size: number, a
 }
 
 /** 投骰 3d6×5 生成幸运 */
-export function rollLuck(): number {
-  return roll3d6x5();
+export function rollLuck(randomUnit: RandomUnit = Math.random): number {
+  return roll3d6x5(randomUnit);
 }
 
 /** 在职业范围内生成信用评级 */
-export function rollCreditRating(range?: [number, number]): number {
+export function rollCreditRating(range?: [number, number], randomUnit: RandomUnit = Math.random): number {
   const [min, max] = range ?? [20, 50];
-  return min + Math.floor(Math.random() * (max - min + 1));
+  return min + Math.floor(drawRandomUnit(randomUnit) * (max - min + 1));
 }
 
 // ============================================================
@@ -552,6 +554,7 @@ export function applyAgeMods(
 export function buildCoCCharacter(
   config: CoCCharacterConfig,
   archetype: CharacterArchetype,
+  randomUnit: RandomUnit = Math.random,
 ): CoCGeneratedCharacter {
   const warnings: string[] = [];
   const age = config.age ?? 30;
@@ -570,9 +573,9 @@ export function buildCoCCharacter(
       education: config.attributes.education ?? 50,
     };
   } else if (config.method === "point_buy") {
-    rawAttrs = pointBuyAttributes(config.pointBudget ?? 460, 40, 90, archetype.priorityAttributes, archetype.minAttributes);
+    rawAttrs = pointBuyAttributes(config.pointBudget ?? 460, 40, 90, archetype.priorityAttributes, archetype.minAttributes, randomUnit);
   } else {
-    rawAttrs = rollAttributes();
+    rawAttrs = rollAttributes(randomUnit);
   }
 
   // 2. 应用年龄调整
@@ -585,11 +588,11 @@ export function buildCoCCharacter(
   warnings.push(...constraintWarnings);
 
   // 4. 生成信用评级
-  const creditRating = attrs["credit_rating"] ?? rollCreditRating(archetype.creditRatingRange);
+  const creditRating = attrs["credit_rating"] ?? rollCreditRating(archetype.creditRatingRange, randomUnit);
 
   // 5. 派生数据
   const luck = config.includeLuck !== false
-    ? rollLuck()
+    ? rollLuck(randomUnit)
     : 0;
   const hp = calcCoCHP(attrs.constitution, attrs.size);
   const ac = calcCoCAC(attrs.dexterity);
@@ -609,7 +612,7 @@ export function buildCoCCharacter(
   const occupationSkills = archetype.occupationSkills ?? archetype.skills ?? [];
 
   // 7.5 背景故事八项（车卡必填项——先生成八项，背景故事由 play-module 层 LLM 撰写）
-  const backgroundProfile = buildBaseBackgroundProfile(archetype);
+  const backgroundProfile = buildBaseBackgroundProfile(archetype, randomUnit);
 
   return {
     name: config.name,
@@ -648,8 +651,9 @@ export function buildCoCCharacter(
 export async function createCoCCharacter(
   config: CoCCharacterConfig,
   archetype: CharacterArchetype,
+  randomUnit: RandomUnit = Math.random,
 ): Promise<CoCGeneratedCharacter> {
-  const character = buildCoCCharacter(config, archetype);
+  const character = buildCoCCharacter(config, archetype, randomUnit);
   try {
     const { getStartingItems } = await import("../rules/coc-cr");
     character.startingItems = getStartingItems(character.creditRating);

@@ -16,7 +16,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { GameSession } from "../api/game-session";
-import { setIntentLLM } from "../llm/intent";
+import { setIntentLLM, type NormalSessionIntentClient } from "../llm/intent";
 import { log } from "../log";
 
 const CFG = {
@@ -24,10 +24,21 @@ const CFG = {
   model: "mock", maxTokens: 128, temperature: 0,
 };
 
-function makeSession(id: string): GameSession & Record<string, any> {
+function makeSession(id: string, sessionIntentClient?: NormalSessionIntentClient): GameSession & Record<string, any> {
   process.env.LLM_API_KEY = "";
   process.env.OPENAI_API_KEY = "";
-  return new GameSession(id, "cosmic-horror", CFG, "investigator", "甲") as any;
+  return new GameSession(
+    id,
+    "cosmic-horror",
+    CFG,
+    "investigator",
+    "甲",
+    undefined,
+    undefined,
+    undefined,
+    "preferred",
+    sessionIntentClient ? { sessionIntentClient } : {},
+  ) as any;
 }
 
 function traceMessages(spy: ReturnType<typeof spyOn>): string[] {
@@ -71,8 +82,13 @@ describe("每回合 intent-trace", () => {
   });
 
   it("手工构造 action:look：轨迹能看出 handler 未处理、随后进对象名闸门并命中线索", async () => {
-    setIntentLLM(fakeIntentLLM({ "看看储物柜": { action: "look" } }));
-    const session = makeSession(`trace-look-${Math.random()}`);
+    // CLI/global parser must not choose a GameSession's action. Give it a
+    // deliberately different answer so this trace proves the session client won.
+    setIntentLLM(fakeIntentLLM({ "看看储物柜": { action: "unknown" } }));
+    const session = makeSession(
+      `trace-look-${Math.random()}`,
+      fakeIntentLLM({ "看看储物柜": { action: "look" } }),
+    );
     await session.act("加载模组 普瑞米尔的谷仓");
     (session as any).movePlayerToScene("中控室");
 
@@ -102,6 +118,24 @@ describe("每回合 intent-trace", () => {
     expect(lines.some((s) => s.includes("route=llm-narration action=unknown reason=unknown-fell-through"))).toBe(true);
     expect(lines.some((s) => s.includes("夜色笼罩") || s.includes("你采取了行动"))).toBe(false);
   });
+});
+
+it("successful intent traces record only action metadata, not the player input", async () => {
+  const playerSecret = "PLAYER_PRIVATE_TRACE_4a8d";
+  const session = makeSession(
+    `trace-private-${Math.random()}`,
+    fakeIntentLLM({ [playerSecret]: { action: "status" } }),
+  );
+  const debugSpy = spyOn(log, "debug");
+  try {
+    await session.act(playerSecret);
+    const lines = traceMessages(debugSpy);
+    expect(lines.some((line) => line.includes("route=intent action=status"))).toBe(true);
+    expect(lines.some((line) => line.includes("inputLength="))).toBe(true);
+    expect(lines.join("\n")).not.toContain(playerSecret);
+  } finally {
+    debugSpy.mockRestore();
+  }
 });
 
 describe("debug 默认不写 stdout", () => {

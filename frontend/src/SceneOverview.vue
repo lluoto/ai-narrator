@@ -9,7 +9,7 @@ const props = defineProps({
   combatActive: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['chat', 'inspect'])
+const emit = defineEmits(['inspect'])
 
 const interactiveNpcs = computed(() => props.npcs.filter(n => n.hp > 0).map(n => ({ ...n, _type: 'npc' })))
 const interactiveMonsters = computed(() => props.monsters.filter(m => m.hp > 0).map(m => ({ ...m, _type: 'monster' })))
@@ -26,10 +26,9 @@ const empty = computed(() => interactiveNpcs.value.length === 0 && interactiveMo
     <div v-if="empty" class="so-empty"><p>当前场景没有可交互的元素。</p></div>
     <div v-if="interactiveNpcs.length > 0" class="so-section">
       <h4 class="so-section-title">👤 NPC ({{ interactiveNpcs.length }})</h4>
-      <div v-for="n in interactiveNpcs" :key="n.name" class="so-entity" @click="emit('chat', n)">
+      <div v-for="n in interactiveNpcs" :key="n.name" class="so-entity so-entity--static">
         <span class="so-entity-name">{{ n.name }}</span>
         <span class="so-entity-hp" :style="{ color: n.hp / n.maxHp <= 0.25 ? '#ff4757' : '#2ed573' }">{{ n.hp }}/{{ n.maxHp }}</span>
-        <button class="so-chat-btn" @click.stop="emit('chat', n)">💬</button>
       </div>
     </div>
     <div v-if="interactiveMonsters.length > 0" class="so-section">
@@ -60,11 +59,10 @@ const empty = computed(() => interactiveNpcs.value.length === 0 && interactiveMo
 .so-section-title { font-size: 11px; color: #888; margin: 0 0 4px; }
 .so-section-title--enemy { color: #ff6b6b; }
 .so-entity { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer; transition: background 0.15s; }
+.so-entity--static { cursor: default; }
 .so-entity:hover { background: rgba(255,255,255,0.05); }
 .so-entity--enemy { cursor: default; }
 .so-entity-name { flex: 1; color: #ccc; }
 .so-entity-hp { font-size: 11px; min-width: 40px; text-align: right; }
-.so-chat-btn { background: transparent; border: 1px solid #3a3a5c; border-radius: 4px; color: #888; cursor: pointer; font-size: 11px; padding: 1px 5px; }
-.so-chat-btn:hover { color: #c9a96e; border-color: #c9a96e; }
 @media (max-width: 480px) { .so-panel { font-size: 11px; } .so-entity { flex-wrap: wrap; } }
 </style>

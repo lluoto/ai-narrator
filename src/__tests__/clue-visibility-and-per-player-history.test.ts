@@ -16,9 +16,10 @@ const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 512, temperature: 0.7,
 };
+const TRANSIENT_RUNTIME = { careerEntryPersistence: "transient" } as const;
 
 async function twoPcArenaAt(sceneName: string) {
-  const session: any = new GameSession(`t5-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员");
+  const session: any = new GameSession(`t5-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员", undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME);
   await session.act("创建角色 investigator 甲"); // p1
   await session.act("创建队友 乙 investigator"); // p2
   await session.act("加载模组 普瑞米尔的谷仓");
@@ -92,7 +93,7 @@ describe("5b：线索揭示只对发现者可见（discoverer_only）", () => {
   });
 
   it("**正确**：单人局行为与现在完全一致——p1 自己掷线索，自己的历史里当然有揭示文本", async () => {
-    const session: any = new GameSession(`t5-solo-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员");
+    const session: any = new GameSession(`t5-solo-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员", undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME);
     await session.act("创建角色 investigator 甲");
     await session.act("加载模组 普瑞米尔的谷仓");
     session.movePlayerToScene("加比的拖车房");

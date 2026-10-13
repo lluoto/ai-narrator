@@ -13,6 +13,9 @@
  */
 
 import { describe, it, expect } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { WorldModelIntegrator, type SceneContext } from "../world/world-model-integrator";
 import { WorldModelLoader } from "../world/world-model-loader";
 
@@ -121,5 +124,107 @@ describe("WorldModelIntegrator 事实边界约束", () => {
     expect(out).toContain("6岁 · 女性");
     expect(out).toContain("未成年幼童：严禁描写为成年人或青少年");
     expect(out).toContain("女性角色：严禁以男性称谓/动作描写，代名词必须使用她");
+  });
+
+  it("serializes structured V18 values in every world-model prompt path", () => {
+    const root = mkdtempSync(join(tmpdir(), "world-model-integrator-text-"));
+    const path = join(root, "structured.jsonl");
+    writeFileSync(path, [
+      {
+        type: "faction_relation",
+        chapter: "1",
+        novel: "structured-text",
+        name: "plaza faction relation",
+        description: "plaza oversight",
+        properties: {
+          allies: ["north-watch", "river-guild"],
+          embargoed: false,
+          treaty: { council: "council-oath", witnesses: ["scribe", "porter"] },
+        },
+      },
+      {
+        type: "behavior",
+        chapter: "2",
+        novel: "structured-text",
+        name: "Guard plaza behavior",
+        description: "Guard watches the plaza",
+        trigger: ["plaza-alarm", { channel: "bell-channel" }],
+        response: ["hold-gate", { fallback: "signal-beacon" }],
+      },
+      {
+        type: "resource",
+        chapter: "3",
+        novel: "structured-text",
+        name: "plaza ledger",
+        description: "ledger record",
+        scarcity: { stock: "low-stock", rationed: false },
+        drives: ["store-ledger", { policy: "ration-policy" }],
+      },
+      {
+        type: "resource",
+        chapter: "4",
+        novel: "structured-text",
+        name: "plaza fallback resource",
+        description: ["fallback-record", { source: "archive-key" }],
+        properties: { accessibility: ["narrow-access", { daytime: false }] },
+      },
+      {
+        type: "game_rule",
+        chapter: "5",
+        novel: "structured-text",
+        name: "plaza dnd rule",
+        description: "plaza procedure",
+        game_rule: true,
+        mechanic: ["rule-step", { followup: "follow-up" }],
+        dnd_mapping: { ability: "Dex", alternatives: ["check", "roll"] },
+      },
+    ].map((row) => JSON.stringify(row)).join("\n"), "utf8");
+
+    try {
+      const loader = new WorldModelLoader();
+      loader.load(path);
+      expect(loader.isLoaded()).toBe(true);
+      const integrator = new WorldModelIntegrator(loader);
+      const context = baseCtx({
+        activeNovel: "structured-text",
+        keywords: ["plaza"],
+        presentNPCs: ["Guard"],
+        ruleset: "dnd5e",
+      });
+
+      const injection = integrator.buildInjection(context);
+      expect(injection.factionContext).toContain(
+        "north-watch\uFF1Briver-guild\uFF1Bfalse\uFF1Bcouncil-oath\uFF1Bscribe\uFF1Bporter",
+      );
+      expect(injection.npcBehaviorHints).toHaveLength(1);
+      expect(injection.npcBehaviorHints[0]).toContain(
+        "plaza-alarm\uFF1Bbell-channel",
+      );
+      expect(injection.npcBehaviorHints[0]).toContain(
+        "hold-gate\uFF1Bsignal-beacon",
+      );
+      expect(injection.resourceContext).toContain("low-stock\uFF1Bfalse");
+      expect(injection.resourceContext).toContain("store-ledger\uFF1Bration-policy");
+      expect(injection.resourceContext).toContain("narrow-access\uFF1Bfalse");
+      expect(injection.resourceContext).toContain("fallback-record\uFF1Barchive-key");
+      expect(injection.dndRuleHints).toEqual([
+        "plaza dnd rule (\u673a\u5236: rule-step\uFF1Bfollow-up) [D&D: Dex\uFF1Bcheck\uFF1Broll]",
+      ]);
+      expect(integrator.getRuleHints("dnd5e", context)).toEqual([
+        "plaza dnd rule: rule-step\uFF1Bfollow-up [Dex\uFF1Bcheck\uFF1Broll]",
+      ]);
+
+      const kp = integrator.buildKPContext(context);
+      const guidance = integrator.getNPCGuidance("Guard", context);
+      for (const prompt of [kp, guidance]) {
+        expect(prompt).not.toContain("[object Object]");
+        expect(prompt).not.toContain("north-watch,river-guild");
+        expect(prompt).not.toContain("hold-gate,signal-beacon");
+      }
+      expect(guidance).toContain("plaza-alarm\uFF1Bbell-channel");
+      expect(guidance).toContain("hold-gate\uFF1Bsignal-beacon");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

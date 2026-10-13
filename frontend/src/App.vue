@@ -1,11 +1,14 @@
 <script setup>
 import { ref, reactive, computed, watch, nextTick } from 'vue'
-import { createSession, sendAction, getArchetypes, getSuggestions, getHistory, listSessions, getSession } from './api.js'
+import { createSession, sendSessionAction, retryPendingCompiledAction, retryPendingOrdinaryAction, pendingOrdinaryActionKind, compiledSessionGeneration, ordinarySessionGeneration, isAuthoritativeOrdinaryCharacter, getArchetypes, getSuggestions, getCompiledActions, getHistory, listSessions, getSession, getCharacter, luckSpend, partyMemberCreate, characterPatch, ordinaryKpMessage } from './api.js'
+import { ordinaryLuckFromAuthoritativeState, ordinaryLuckFromCreateResponse, ordinaryLuckSpendOutcome, ordinaryLuckSpendRequest, ordinaryLuckSpendVisible, submitOrdinaryLuckSpend } from './ordinary-luck-spend-controller.js'
+import { ordinaryPartyMemberCreateOutcome, ordinaryPartyMemberCreateRequest, ordinaryPartyMemberCreateVisible, ordinaryPendingKindFromDurableStorage, submitOrdinaryPartyMemberCreate } from './ordinary-party-member-create-controller.js'
+import { ordinaryCharacterEditorVisible, ordinaryCharacterPatchOutcome, ordinaryCharacterPatchRequest, submitOrdinaryCharacterPatch } from './ordinary-character-patch-controller.js'
+import { clearOwnerBearer, ownerFetch, setOwnerBearer } from './owner-auth.js'
 import KPDashboard from './KPDashboard.vue'
 import CombatGrid from './CombatGrid.vue'
 import ModuleEditor from './ModuleEditor.vue'
 import CharacterEditor from './CharacterEditor.vue'
-import NpcChat from './NpcChat.vue'
 import SceneOverview from './SceneOverview.vue'
 import SettingsPanel from './SettingsPanel.vue'
 
@@ -13,6 +16,10 @@ import SettingsPanel from './SettingsPanel.vue'
 const screen = ref('start')
 const loading = ref(false)
 const error = ref(null)
+const ownerCredential = ref('')
+const ownerAuthenticated = ref(false)
+const ownerAuthPending = ref(false)
+const ownerAuthError = ref('')
 const loadingSessions = ref(false)
 const savedSessions = ref([])
 const characterName = ref('')
@@ -25,9 +32,9 @@ const rulesetName = computed(() => selectedRuleset.value === 'cosmic-horror' ? '
 const session = reactive({
   id: '', round: 0, scene: '', playerName: '', archetype: '',
   ruleset: '', hp: 0, maxHp: 0, san: 0, maxSAN: 0,
-  tempInsanity: false, indefInsanity: false, dead: false,
-  luck: 0, creditRating: 0, skills: {}, inventory: [], weapons: [], attributes: {},
-  bgm: '',
+  tempInsanity: false, indefInsanity: false, dead: false, terminal: null,
+  luck: null, creditRating: 0, skills: {}, inventory: [], weapons: [], attributes: {},
+  bgm: '', sessionKind: '', ordinaryGeneration: null, compiledGeneration: null,
 })
 // session.archetype 存的是职业 id（investigator），状态栏要显示中文名。
 // 职业表没加载到（例如直接恢复旧会话）时退回显示 id，而不是显示空白。
@@ -169,7 +176,7 @@ async function startScripted() {
   scriptedLoading.value = true
   scriptedError.value = ''
   try {
-    const r = await fetch('/api/scripted', { method: 'POST' })
+    const r = await ownerFetch('/api/scripted', { method: 'POST' })
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     const data = await r.json()
     scriptedId.value = data.id
@@ -189,7 +196,7 @@ async function pollScripted() {
   clearTimeout(scriptedTimer)
   if (!scriptedId.value || scriptedFinished.value) return
   try {
-    const r = await fetch(`/api/scripted/${scriptedId.value}`)
+    const r = await ownerFetch(`/api/scripted/${scriptedId.value}`)
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     const snap = await r.json()
     // 服务端只回增量，直接追加即可，不必去重
@@ -215,7 +222,7 @@ async function chooseScripted(option) {
   const pending = scriptedPending.value
   scriptedPending.value = null // 先收起选项，避免重复点击提交两次
   try {
-    const r = await fetch(`/api/scripted/${scriptedId.value}/decide`, {
+    const r = await ownerFetch(`/api/scripted/${scriptedId.value}/decide`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ option }),
@@ -243,6 +250,16 @@ function exitScripted() {
   screen.value = 'start'
 }
 
+function clearOwnerAccess() {
+  clearOwnerBearer()
+  ownerCredential.value = ''
+  ownerAuthenticated.value = false
+  ownerAuthError.value = ''
+  savedSessions.value = []
+  exitScripted()
+  screen.value = 'start'
+}
+
 const scriptedLogEl = ref(null)
 function scrollScriptedLog() {
   nextTick(() => {
@@ -261,14 +278,22 @@ const kpVisible = ref(false)
 const moduleEditorVisible = ref(false)
 const settingsVisible = ref(false)
 const charEditorVisible = ref(false)
-const npcChatVisible = ref(false)
-const chattingNpc = ref(null)
+const charEditorOpening = ref(false)
+const charEditorCharacter = ref(null)
+const charEditorSanity = ref(null)
+const charEditorStatus = ref('')
 const pcList = ref([])
 const activePc = ref(0)
 const suggestions = ref([])
 const logFilter = ref('all')
 const filteredMessages = computed(() => logFilter.value === 'all' ? messages.value : messages.value.filter(m => m.type === logFilter.value))
 const inputValue = ref('')
+const luckSpendAmount = ref('')
+const partyMemberName = ref('')
+const partyMemberArchetype = ref('')
+// This is only a browser-side recovery indicator. The durable record itself
+// remains in api.js/localStorage and is always replayed before a new request.
+const ordinaryPendingKind = ref(null)
 const history = ref([])
 const historyIndex = ref(-1)
 const logEl = ref(null)
@@ -279,6 +304,61 @@ const sanPercent = computed(() => session.maxSAN > 0 ? Math.max(0, Math.round((s
 const hpColor = computed(() => hpPercent.value <= 25 ? '#ff4757' : hpPercent.value <= 50 ? '#ffa502' : '#2ed573')
 const sanColor = computed(() => sanPercent.value <= 25 ? '#ff4757' : sanPercent.value <= 50 ? '#ffa502' : '#2ed573')
 const hasInsanity = computed(() => session.tempInsanity || session.indefInsanity)
+const sessionTerminal = computed(() => session.dead || session.terminal !== null)
+const ordinaryLuckSpendVisibleForSession = computed(() => ordinaryLuckSpendVisible({
+  sessionKind: session.sessionKind,
+  ruleset: session.ruleset,
+  ordinaryGeneration: session.ordinaryGeneration,
+  luck: session.luck,
+}))
+const ordinaryLuckSpendDisabled = computed(() => ordinaryLuckSpendRequest({
+  sessionKind: session.sessionKind,
+  ruleset: session.ruleset,
+  ordinaryGeneration: session.ordinaryGeneration,
+  luck: session.luck,
+  loading: loading.value,
+  terminal: sessionTerminal.value ? session.terminal ?? { kind: 'legacy_unknown' } : null,
+  pendingKind: ordinaryPendingKind.value,
+  amount: luckSpendAmount.value,
+}) === null)
+const ordinaryPartyMemberCreateVisibleForSession = computed(() => ordinaryPartyMemberCreateVisible({
+  sessionKind: session.sessionKind,
+  ordinaryGeneration: session.ordinaryGeneration,
+}))
+const ordinaryPartyMemberCreateDisabled = computed(() => ordinaryPartyMemberCreateRequest({
+  sessionKind: session.sessionKind,
+  ordinaryGeneration: session.ordinaryGeneration,
+  loading: loading.value,
+  terminal: sessionTerminal.value ? session.terminal ?? { kind: 'legacy_unknown' } : null,
+  pendingKind: ordinaryPendingKind.value,
+  name: partyMemberName.value,
+  archetype: partyMemberArchetype.value,
+}) === null)
+const ordinaryCharacterEditorVisibleForSession = computed(() => ordinaryCharacterEditorVisible({
+  sessionKind: session.sessionKind,
+  ordinaryGeneration: session.ordinaryGeneration,
+}))
+// Opening has no form patch yet. Keep that admission separate from save so
+// the first click can perform the mandatory authoritative GET.
+const ordinaryCharacterEditorDisabled = computed(() => !ordinaryCharacterEditorVisibleForSession.value
+  || loading.value || charEditorOpening.value || sessionTerminal.value || !!ordinaryPendingKind.value)
+const ordinaryPendingLabel = computed(() => ({
+  text_action: '先前的文本行动正在确认',
+  luck_spend: '先前的幸运花费正在确认',
+  party_member_create: '新增队友正在确认',
+  character_patch: '角色编辑正在确认',
+  kp_message: 'KP 公告正在确认',
+}[ordinaryPendingKind.value] ?? ''))
+const terminalTitle = computed(() => {
+  if (session.terminal?.kind === 'module_departure') return '调查结束'
+  if (session.terminal?.kind === 'legacy_unknown') return '会话已结束'
+  return '你已死亡'
+})
+const terminalDescription = computed(() => {
+  if (session.terminal?.kind === 'module_departure') return `结局：${session.terminal.endingName}`
+  if (session.terminal?.kind === 'legacy_unknown') return '该会话来自旧版本记录，无法安全判定结束原因。'
+  return '调查在此终止。'
+})
 const showCharCard = computed(() => selectedCompanion.value !== null)
 
 async function scrollToBottom() { await nextTick(); if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight }
@@ -299,28 +379,60 @@ async function loadArchetypes(rs) {
   } finally { archetypeLoading.value = false }
 }
 
-async function loadSavedSessions() {
-  loadingSessions.value = true
+async function authenticateOwner() {
+  if (ownerAuthPending.value) return
+  ownerAuthPending.value = true
+  ownerAuthError.value = ''
   try {
+    setOwnerBearer(ownerCredential.value)
+    ownerCredential.value = ''
+    loadingSessions.value = true
     const data = await listSessions()
     savedSessions.value = data.filter(s => s.id)
-  } catch { savedSessions.value = [] }
-  finally { loadingSessions.value = false }
+    ownerAuthenticated.value = true
+    await loadArchetypes()
+  } catch {
+    clearOwnerBearer()
+    ownerCredential.value = ''
+    ownerAuthenticated.value = false
+    savedSessions.value = []
+    ownerAuthError.value = 'Owner credential could not be verified.'
+  } finally {
+    loadingSessions.value = false
+    ownerAuthPending.value = false
+  }
 }
 
-loadArchetypes()
-loadSavedSessions()
 watch(selectedRuleset, (rs) => loadArchetypes(rs))
+watch(archetypes, (entries) => {
+  if (!entries.some(entry => entry?.id === partyMemberArchetype.value)) {
+    partyMemberArchetype.value = entries[0]?.id || ''
+  }
+})
 
 async function startGame() {
   loading.value = true; error.value = null
+  // The browser queue is keyed by session ID. A visible indicator from the
+  // game just left cannot govern this allocation; after its ID is known,
+  // coordinateOrdinaryPending() installs only this session's slot.
+  ordinaryPendingKind.value = null
+  clearCharacterEditorState()
   try {
     const name = characterName.value.trim() || '调查员'
     const archetype = selectedArchetype.value || 'investigator'
     const data = await createSession({ ruleset: selectedRuleset.value, archetype, characterName: name })
     session.id = data.sessionId; session.round = data.summary?.round ?? 1; session.scene = data.summary?.scene ?? '序幕'
+    session.sessionKind = data.sessionKind === 'ordinary' || data.sessionKind === 'compiled' ? data.sessionKind : ''
+    session.ordinaryGeneration = ordinarySessionGeneration(data, session.sessionKind)
+    session.compiledGeneration = compiledSessionGeneration(data, session.sessionKind)
     session.playerName = data.characterName ?? name; session.archetype = data.summary?.archetype ?? ''
     session.ruleset = data.summary?.ruleset ?? '宇宙恐怖（百分位）'
+    // Creation has no authoritative state projection yet; its canonical
+    // character summary is the sole permitted initial Luck source.
+    session.luck = session.sessionKind === 'ordinary' && session.ruleset === 'cosmic-horror'
+      ? ordinaryLuckFromCreateResponse(data)
+      : null
+    luckSpendAmount.value = ''
     if (data.character) { session.hp = data.character.hp ?? 10; session.maxHp = data.character.maxHp ?? 10; session.san = data.character.attributes?.power ?? 50; session.maxSAN = data.character.attributes?.power ?? 50 }
     else { session.hp = 10; session.maxHp = 10; session.san = 55; session.maxSAN = 55 }
     pcList.value = [{ id: 'p1', name: data.characterName ?? name }]
@@ -330,30 +442,561 @@ async function startGame() {
     session.bgm = data.state?.bgm ?? ''
     messages.value = [{ id: Date.now(), type: 'narration', speaker: '守秘人', content: data.opening || '夜幕降临，故事由此开始……' }]
     screen.value = 'game'
+    if (session.sessionKind === 'ordinary') {
+      try {
+        // A collision/recovery edge can leave this freshly selected session
+        // with its own browser-durable request. Replay/reconcile that exact
+        // slot rather than inheriting an indicator from the previous session.
+        await coordinateOrdinaryPending()
+      } catch (pendingError) {
+        resyncOrdinaryPendingAfterFailure()
+        error.value = pendingError?.message || '普通操作恢复失败'
+      }
+    }
   } catch (e) { error.value = e.message || '创建游戏失败' }
   finally { loading.value = false }
 }
 
+function applyAuthoritativeSessionSnapshot(current, fallback = {}) {
+  const summary = current?.summary || fallback
+  session.id = summary.id || fallback.id || ''
+  session.round = current?.state?.round ?? summary.round ?? session.round
+  session.scene = current?.state?.scene ?? summary.scene ?? session.scene
+  session.playerName = summary.playerName ?? session.playerName ?? '调查员'
+  session.archetype = summary.archetype ?? session.archetype
+  session.ruleset = summary.ruleset ?? fallback?.ruleset ?? fallback?.summary?.ruleset ?? ''
+  const declaredKind = current?.sessionKind ?? current?.summary?.sessionKind
+  session.sessionKind = declaredKind === 'ordinary' || declaredKind === 'compiled' ? declaredKind : ''
+  if (session.sessionKind === 'ordinary') {
+    // A GET/reconciliation payload, rather than an earlier list entry or a
+    // previous session, owns the generation and Luck visible to this screen.
+    session.ordinaryGeneration = ordinarySessionGeneration(current, 'ordinary')
+    session.compiledGeneration = null
+  } else if (session.sessionKind === 'compiled') {
+    session.compiledGeneration = compiledSessionGeneration(current, 'compiled')
+    session.ordinaryGeneration = null
+  } else {
+    session.ordinaryGeneration = null
+    session.compiledGeneration = null
+  }
+  session.luck = session.sessionKind === 'ordinary' && session.ruleset === 'cosmic-horror'
+    ? ordinaryLuckFromAuthoritativeState(current)
+    : null
+  if (current?.state) {
+    session.bgm = current.state.bgm ?? session.bgm
+    if (current.state.player) {
+      session.hp = current.state.player.hp ?? session.hp
+      session.maxHp = current.state.player.maxHp ?? session.maxHp
+    }
+    if (current.state.companions) companions.value = current.state.companions
+    if (current.state.npcs) npcs.value = current.state.npcs
+    if (current.state.monsters) monsters.value = current.state.monsters
+  }
+  if (current?.sanity) {
+    session.san = current.sanity.currentSAN ?? session.san
+    session.maxSAN = current.sanity.maxSAN ?? session.maxSAN
+    session.tempInsanity = current.sanity.temporaryInsanity ?? false
+    session.indefInsanity = current.sanity.indefiniteInsanity ?? false
+  }
+  applyTerminalState(current, declaredKind)
+  if (Array.isArray(current?.history)) {
+    messages.value = current.history.map((m) => ({ id: Date.now() + Math.random(), type: m.type || 'system', speaker: m.speaker || '', content: m.content || '', verbatim: m.verbatim === true }))
+  }
+  // Party membership is rendered only from the authoritative GET/replay
+  // projection. A successful /party receipt never mutates this list itself.
+  const authoritativeParty = Array.isArray(current?.state?.party)
+    ? current.state.party.filter(member => member && typeof member.pcId === 'string' && typeof member.name === 'string')
+      .map(member => ({ id: member.pcId, name: member.name }))
+    : []
+  pcList.value = authoritativeParty.length ? authoritativeParty : [{ id: 'p1', name: session.playerName }]
+}
+
+function applyTerminalState(data, sessionKind = session.sessionKind) {
+  if (data?.terminal !== undefined) session.terminal = data.terminal
+  else if (sessionKind === 'compiled') session.terminal = null
+  if (data?.dead !== undefined) session.dead = data.dead === true
+  if (session.terminal?.kind === 'death' || (session.dead && session.terminal === null)) session.hp = 0
+}
+
+function applyAuthoritativeHistory(data) {
+  if (!Array.isArray(data?.messages)) return
+  messages.value = data.messages.map((m) => ({ id: Date.now() + Math.random(), type: m.type || 'system', speaker: m.speaker || '', content: m.content || '', verbatim: m.verbatim === true }))
+}
+
+function clearCharacterEditorState() {
+  charEditorVisible.value = false
+  charEditorOpening.value = false
+  charEditorCharacter.value = null
+  charEditorSanity.value = null
+  charEditorStatus.value = ''
+}
+
+/** Project only a complete owner GET `/character`; never synthesize a sheet from summary. */
+function applyAuthoritativeCharacterProjection(authority) {
+  const generation = ordinarySessionGeneration(authority, 'ordinary')
+  const character = authority?.character
+  if (!isAuthoritativeOrdinaryCharacter(authority, session.id) || generation === null || !character
+    || authority?.summary?.id !== session.id || typeof character.name !== 'string'
+    || !Array.isArray(authority.inventory) || !Array.isArray(authority.weapons)) return false
+  const complete = {
+    ...character,
+    skills: { ...(character.skills ?? {}) },
+    attributes: { ...(character.attributes ?? {}) },
+    inventory: [...authority.inventory],
+    weapons: [...authority.weapons],
+  }
+  charEditorCharacter.value = complete
+  charEditorSanity.value = authority.sanity ? { ...authority.sanity } : null
+  session.ordinaryGeneration = generation
+  session.compiledGeneration = null
+  session.sessionKind = 'ordinary'
+  session.playerName = authority.summary?.playerName ?? character.name
+  session.archetype = authority.summary?.archetype ?? character.archetype
+  session.ruleset = authority.summary?.ruleset ?? session.ruleset
+  session.hp = character.hp
+  session.maxHp = character.maxHp
+  session.luck = character.luck
+  session.creditRating = character.creditRating
+  session.skills = { ...complete.skills }
+  session.attributes = { ...complete.attributes }
+  session.inventory = [...complete.inventory]
+  session.weapons = [...complete.weapons]
+  if (authority.sanity) {
+    session.san = authority.sanity.currentSAN ?? session.san
+    session.maxSAN = authority.sanity.maxSAN ?? session.maxSAN
+    session.tempInsanity = authority.sanity.temporaryInsanity ?? false
+    session.indefInsanity = authority.sanity.indefiniteInsanity ?? false
+  }
+  return true
+}
+
+function applyOrdinaryErrorGeneration(data) {
+  const generation = ordinarySessionGeneration(data, 'ordinary')
+  if (generation === null) return
+  const previousGeneration = session.ordinaryGeneration
+  session.ordinaryGeneration = generation
+  // An error can name a newer generation but never its Luck. Keeping the old
+  // value paired with that newer generation would authorize an unsafe spend.
+  if (previousGeneration !== generation) session.luck = null
+}
+
+function applyRecoveredOrdinaryPending(recovered) {
+  if (recovered?.kind !== 'reconciled') return false
+  // Replayed ordinary work, including /party, is rendered only from these
+  // authoritative reads; never append a locally invented party member.
+  applyAuthoritativeSessionSnapshot(recovered.session)
+  applyAuthoritativeHistory(recovered.history)
+  if (recovered.character) applyAuthoritativeCharacterProjection(recovered.character)
+  ordinaryPendingKind.value = recovered.pendingRetained ? recovered.pendingKind : null
+  return true
+}
+
+function resyncOrdinaryPendingKind() {
+  if (session.sessionKind !== 'ordinary' || !session.id) {
+    ordinaryPendingKind.value = null
+    return null
+  }
+  const durableKind = ordinaryPendingKindFromDurableStorage(
+    () => pendingOrdinaryActionKind(session.id),
+  )
+  ordinaryPendingKind.value = durableKind
+  return durableKind
+}
+
+function resyncOrdinaryPendingAfterFailure() {
+  try {
+    return resyncOrdinaryPendingKind()
+  } catch {
+    // If the slot itself is unreadable we cannot prove a pre-persist failure.
+    // Retain the conservative indicator instead of blindly enabling writes.
+    return ordinaryPendingKind.value
+  }
+}
+
+async function coordinateOrdinaryPending() {
+  if (session.sessionKind !== 'ordinary' || !session.id) {
+    ordinaryPendingKind.value = null
+    return null
+  }
+  resyncOrdinaryPendingKind()
+  const recovered = await retryPendingOrdinaryAction(session.id)
+  if (!recovered) ordinaryPendingKind.value = null
+  applyRecoveredOrdinaryPending(recovered)
+  return recovered
+}
+
+/**
+ * KPDashboard has no queue of its own. It first coordinates the shared
+ * browser-durable slot, then lets api.js persist/post/reconcile the one
+ * host announcement. A result for another kind is deliberately not reported
+ * as this form having sent anything.
+ */
+async function submitOrdinaryKpMessage(input) {
+  if (loading.value || session.sessionKind !== 'ordinary' || !session.id || sessionTerminal.value || ordinaryPendingKind.value) {
+    return { kind: 'not-submitted' }
+  }
+  const sessionId = session.id
+  loading.value = true
+  error.value = null
+  try {
+    const coordinated = await coordinateOrdinaryPending()
+    if (coordinated) return { kind: 'other-coordinated', pendingKind: coordinated.pendingKind }
+    // The local indicator is conservative. api.js only keeps it after a
+    // successful storage write; failure resync below removes it again.
+    ordinaryPendingKind.value = 'kp_message'
+    const result = await ordinaryKpMessage(sessionId, input, {
+      expectedGeneration: session.ordinaryGeneration,
+    })
+    if (session.id !== sessionId) return { kind: 'session-changed' }
+    if (result?.kind === 'reconciled') applyRecoveredOrdinaryPending(result)
+    if (result?.kind === 'reconciled'
+      && result.pendingKind === 'kp_message'
+      && !result.pendingRetained
+      && result.receipt) {
+      // The receipt was strictly bound by api.js and the preceding helper has
+      // already replaced the UI with owner GET session/history authority.
+      // KPDashboard observes the generation prop and refreshes its read view.
+      return { kind: 'sent' }
+    }
+    return { kind: 'not-confirmed', pendingKind: result?.pendingKind }
+  } catch (e) {
+    if (session.id === sessionId) {
+      resyncOrdinaryPendingAfterFailure()
+      applyOrdinaryErrorGeneration(e?.data)
+      error.value = e?.message || 'KP announcement was not confirmed.'
+    }
+    return { kind: 'failed' }
+  } finally {
+    if (session.id === sessionId) loading.value = false
+  }
+}
+
+async function openOrdinaryCharacterEditor() {
+  if (ordinaryCharacterEditorDisabled.value) return
+  const sessionId = session.id
+  charEditorOpening.value = true
+  charEditorStatus.value = 'Loading the authoritative character sheet...'
+  try {
+    // Opening cannot reuse summary/session fields: the editor needs the
+    // complete active-PC view, including inventory, weapons, and attributes.
+    const authority = await getCharacter(sessionId)
+    if (session.id !== sessionId || session.sessionKind !== 'ordinary') return
+    if (!applyAuthoritativeCharacterProjection(authority)) throw new Error('authoritative character response is invalid')
+    charEditorStatus.value = ''
+    charEditorVisible.value = true
+  } catch (e) {
+    if (session.id === sessionId) {
+      charEditorVisible.value = false
+      charEditorStatus.value = ''
+      error.value = e?.message || 'Unable to load authoritative character'
+    }
+  } finally {
+    if (session.id === sessionId) charEditorOpening.value = false
+  }
+}
+
+async function saveOrdinaryCharacterPatch(patch) {
+  if (ordinaryCharacterEditorDisabled.value || loading.value) return
+  const sessionId = session.id
+  loading.value = true
+  error.value = null
+  charEditorStatus.value = 'Persisting durable character patch...'
+  try {
+    const dispatched = await submitOrdinaryCharacterPatch({
+      sessionKind: session.sessionKind,
+      ordinaryGeneration: session.ordinaryGeneration,
+      loading: false,
+      terminal: sessionTerminal.value ? session.terminal ?? { kind: 'legacy_unknown' } : null,
+      pendingKind: ordinaryPendingKind.value,
+      patch,
+    }, ({ patch: requestPatch, expectedGeneration }) => {
+      ordinaryPendingKind.value = 'character_patch'
+      return characterPatch(sessionId, requestPatch, { expectedGeneration })
+    })
+    if (dispatched.kind === 'not-submitted') return
+    if (session.id !== sessionId) return
+    const result = dispatched.result
+    if (result?.kind === 'reconciled') applyRecoveredOrdinaryPending(result)
+    const outcome = ordinaryCharacterPatchOutcome(result)
+    if (outcome.kind === 'character-confirmed') {
+      // `result.character` is the completed GET view used by the API's
+      // reconciliation, not the POST body or locally edited form state.
+      if (!applyAuthoritativeCharacterProjection(outcome.character)) throw new Error('authoritative character projection is invalid')
+      charEditorStatus.value = 'Saved and confirmed from the durable character view.'
+      return
+    }
+    if (outcome.kind === 'character-pending') {
+      charEditorStatus.value = 'The request is persisted but still awaiting confirmation.'
+      return
+    }
+    if (outcome.kind === 'character-not-committed') {
+      charEditorStatus.value = 'The patch was rejected; the displayed sheet was refreshed but not saved.'
+      return
+    }
+    if (outcome.kind === 'other-pending' || outcome.kind === 'other-reconciled') {
+      charEditorStatus.value = 'A prior ordinary request was coordinated first; this sheet was not saved.'
+      return
+    }
+    charEditorStatus.value = 'The response was not an authoritative character confirmation.'
+  } catch (e) {
+    if (session.id === sessionId) {
+      resyncOrdinaryPendingAfterFailure()
+      applyOrdinaryErrorGeneration(e?.data)
+      charEditorStatus.value = `Not confirmed: ${e?.message || 'character save failed'}`
+    }
+  } finally {
+    if (session.id === sessionId) loading.value = false
+  }
+}
+
+async function submitLuckSpend() {
+  if (loading.value) return
+  loading.value = true
+  error.value = null
+  try {
+    const dispatched = await submitOrdinaryLuckSpend({
+      sessionKind: session.sessionKind,
+      ruleset: session.ruleset,
+      ordinaryGeneration: session.ordinaryGeneration,
+      luck: session.luck,
+      loading: false,
+      terminal: sessionTerminal.value ? session.terminal ?? { kind: 'legacy_unknown' } : null,
+      pendingKind: ordinaryPendingKind.value,
+      amount: luckSpendAmount.value,
+    }, ({ amount, expectedGeneration }) => {
+      ordinaryPendingKind.value = 'luck_spend'
+      return luckSpend(session.id, amount, { expectedGeneration })
+    })
+    if (dispatched.kind === 'not-submitted') return
+
+    const result = dispatched.result
+    if (result?.kind === 'reconciled') {
+      // Reconciliation state/history outranks any historical receipt.
+      applyRecoveredOrdinaryPending(result)
+    }
+    else ordinaryPendingKind.value = null
+    const outcome = ordinaryLuckSpendOutcome(result)
+    if (outcome.kind === 'text-reconciled') {
+      messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '已同步先前已提交的文本行动；请确认新状态后再花费幸运。' })
+      return
+    }
+    if (outcome.kind === 'text-pending') {
+      messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '先前文本行动仍待确认；尚未花费幸运。' })
+      return
+    }
+    if (outcome.kind === 'luck-pending') {
+      messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '幸运花费仍待确认；尚未报告花费成功。' })
+      return
+    }
+    if (outcome.kind === 'luck-not-confirmed') {
+      messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '先前幸运花费未获确认；尚未报告花费成功。' })
+      return
+    }
+    if (outcome.kind === 'luck-receipt' || outcome.kind === 'luck-reconciled') {
+      // This assignment occurs only after an accepted receipt/reconciled GET,
+      // never on click or while its durable request is pending.
+      session.ordinaryGeneration = outcome.ordinaryGeneration
+      session.luck = outcome.luck
+      luckSpendAmount.value = ''
+      messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: outcome.kind === 'luck-receipt' ? '已确认花费幸运。' : '已同步已确认的幸运花费。' })
+      return
+    }
+    // A malformed success body carries neither an authoritative state nor a
+    // usable receipt, so hide the control instead of retaining stale Luck.
+    session.luck = null
+    messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '幸运花费响应无法验证；请刷新会话后重试。' })
+  } catch (e) {
+    resyncOrdinaryPendingAfterFailure()
+    applyOrdinaryErrorGeneration(e?.data)
+    messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '错误：' + (e.message || '幸运花费失败') })
+  } finally {
+    loading.value = false
+    refreshSuggestions().catch(() => {})
+  }
+}
+
+async function submitPartyMemberCreate() {
+  if (loading.value) return
+  loading.value = true
+  error.value = null
+  try {
+    const dispatched = await submitOrdinaryPartyMemberCreate({
+      sessionKind: session.sessionKind,
+      ordinaryGeneration: session.ordinaryGeneration,
+      loading: false,
+      terminal: sessionTerminal.value ? session.terminal ?? { kind: 'legacy_unknown' } : null,
+      pendingKind: ordinaryPendingKind.value,
+      name: partyMemberName.value,
+      archetype: partyMemberArchetype.value,
+    }, ({ name, archetype, meta, expectedGeneration }) => {
+      ordinaryPendingKind.value = 'party_member_create'
+      return partyMemberCreate(session.id, { name, archetype, ...(meta ? { meta } : {}) }, { expectedGeneration })
+    })
+    if (dispatched.kind === 'not-submitted') return
+
+    const result = dispatched.result
+    if (result?.kind === 'reconciled') applyRecoveredOrdinaryPending(result)
+    const outcome = ordinaryPartyMemberCreateOutcome(result)
+    if (outcome.kind === 'party-reconciled') {
+      // The authoritative GET has already refreshed pcList/party state. Do
+      // not add an optimistic local member or guess the server-assigned pcId.
+      partyMemberName.value = ''
+      messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '已同步新增队友。' })
+      return
+    }
+    if (outcome.kind === 'party-pending' || outcome.kind === 'party-not-confirmed') {
+      messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '新增队友仍待确认；尚未在本地加入队伍。' })
+      return
+    }
+    if (outcome.kind === 'other-reconciled' || outcome.kind === 'other-pending') {
+      messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: `已优先协调${ordinaryPendingLabel.value || '先前的普通操作'}；尚未新增队友。` })
+      return
+    }
+    messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '新增队友响应无法验证；请刷新会话后重试。' })
+  } catch (e) {
+    resyncOrdinaryPendingAfterFailure()
+    applyOrdinaryErrorGeneration(e?.data)
+    messages.value.push({ id: Date.now(), type: 'system', speaker: '系统', content: '错误：' + (e.message || '新增队友失败') })
+  } finally {
+    loading.value = false
+    refreshSuggestions().catch(() => {})
+  }
+}
+
 async function resumeSession(s) {
   loading.value = true
+  // A saved-session switch must not carry a typed amount or Luck from the
+  // previously viewed session while its authoritative GET is in flight.
+  luckSpendAmount.value = ''
+  session.luck = null
+  ordinaryPendingKind.value = null
+  clearCharacterEditorState()
   try {
-    session.id = s.id; session.round = s.round ?? 0; session.scene = s.scene ?? ''
-    session.playerName = s.playerName ?? '调查员'; session.ruleset = s.ruleset ?? '宇宙恐怖（百分位）'
-    try { const hist = await getHistory(s.id, 100); messages.value = (hist.messages || []).map((m) => ({ id: Date.now() + Math.random(), type: m.type || 'system', speaker: m.speaker || '', content: m.content || '', verbatim: m.verbatim === true })) }
-    catch { messages.value = [] }
+    const current = await getSession(s.id)
+    applyAuthoritativeSessionSnapshot(current, s)
+    let recovered = null
+    if (session.sessionKind === 'ordinary') {
+      // A durable party request must be coordinated before this restored view
+      // permits text or Luck. Its queue indicator remains set on an unknown
+      // acknowledgement, which keeps every ordinary control disabled.
+      try { recovered = await coordinateOrdinaryPending() }
+      catch (e) {
+        applyOrdinaryErrorGeneration(e?.data)
+        error.value = e?.message || '普通操作恢复失败'
+      }
+    }
+    if (!recovered) {
+      try { const hist = await getHistory(s.id, 100); applyAuthoritativeHistory(hist) }
+      catch { messages.value = [] }
+    }
     screen.value = 'game'
+    try { await refreshSuggestions() }
+    catch (e) { error.value = e?.message || '建议刷新失败' }
   } catch (e) { error.value = e.message }
   finally { loading.value = false }
 }
 
+async function refreshSuggestions() {
+  if (!session.id) return
+  if (sessionTerminal.value) { suggestions.value = []; return }
+  if (session.sessionKind === 'ordinary') {
+    await coordinateOrdinaryPending()
+    suggestions.value = await getSuggestions(session.id)
+    return
+  }
+  if (session.sessionKind === 'compiled') {
+    let reconciledCatalog = null
+    try {
+      // Resume/refresh is a recovery point too. The API validates the live
+      // catalog before replaying, and never asks the intent model while a
+      // durable structured request is pending.
+      const recovered = await retryPendingCompiledAction(session.id, { pcId: 'p1' })
+      if (recovered?.kind === 'executed') applyRecoveredCompiledAction(recovered.data)
+      if (recovered?.kind === 'reconciled') {
+        applyAuthoritativeSessionSnapshot(recovered.session)
+        reconciledCatalog = recovered.catalog
+      }
+    } catch (e) {
+      const deterministic = e?.pendingDiscarded || e?.pendingCleared || (Number.isInteger(e?.status) && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429)
+      if (!deterministic) throw e
+      const generation = compiledSessionGeneration(e?.data, 'compiled')
+      if (generation !== null) session.compiledGeneration = generation
+    }
+    const data = reconciledCatalog || await getCompiledActions(session.id, 'p1')
+    const generation = compiledSessionGeneration(data, 'compiled')
+    if (generation !== null) session.compiledGeneration = generation
+    suggestions.value = (data.actions || []).map(action => action.label).filter(Boolean)
+    return
+  }
+  suggestions.value = await getSuggestions(session.id)
+}
+
+function applyRecoveredCompiledAction(data) {
+  session.luck = null
+  const generation = compiledSessionGeneration(data, 'compiled')
+  if (generation !== null) session.compiledGeneration = generation
+  const narrative = (data?.narrative || '').trim()
+  if (narrative) messages.value.push({ id: Date.now(), type: 'narration', speaker: '守秘人', content: narrative })
+  for (const ev of data?.events || []) {
+    if (narrative && (ev.content || '').trim() === narrative) continue
+    messages.value.push({ id: Date.now() + Math.random(), type: ev.type || 'system', speaker: ev.speaker || '系统', content: ev.content || '', verbatim: ev.verbatim === true })
+    enqueueVoice(ev.voiceKey)
+  }
+  if (data?.state) { session.round = data.state.round ?? session.round; session.scene = data.state.scene ?? session.scene; session.bgm = data.state.bgm ?? '' }
+  if (data?.state?.player) { session.hp = data.state.player.hp ?? session.hp; session.maxHp = data.state.player.maxHp ?? session.maxHp }
+  if (data?.state?.companions) companions.value = data.state.companions
+  if (data?.state?.npcs) npcs.value = data.state.npcs
+  if (data?.state?.monsters) monsters.value = data.state.monsters
+  applyTerminalState(data)
+  if (data?.sanity) { session.san = data.sanity.currentSAN ?? session.san; session.maxSAN = data.sanity.maxSAN ?? session.maxSAN; session.tempInsanity = data.sanity.temporaryInsanity ?? false; session.indefInsanity = data.sanity.indefiniteInsanity ?? false }
+}
+
+function compiledIntentMessage(resolution) {
+  if (resolution?.status === 'ambiguous') return `这个行动可能对应：${(resolution.mechanismIds || []).join('、')}。请换一种更明确的说法。`
+  if (resolution?.status === 'no_match') return '当前可执行动作中没有匹配项；请换一种说法。'
+  return '无法确认当前可执行的编译动作。'
+}
+
 async function submitAction(inputText, actingPc) {
-  const trimmed = inputText.trim(); if (!trimmed || loading.value) return
+  const trimmed = inputText.trim(); if (!trimmed || loading.value || sessionTerminal.value || ordinaryPendingKind.value) return
   const speaker = (actingPc !== undefined ? pcList.value[actingPc]?.name : pcList.value[activePc.value]?.name) || session.playerName
   if (history.value.length === 0 || history.value[history.value.length - 1] !== trimmed) history.value.push(trimmed)
   historyIndex.value = -1; loading.value = true; error.value = null
-  messages.value.push({ id: Date.now(), type: 'action', speaker, content: trimmed })
   try {
-    const data = await sendAction(session.id, trimmed)
+    if (session.sessionKind === 'ordinary') ordinaryPendingKind.value = 'text_action'
+    // The model sees only the current executable catalog. It has no write
+    // authority: a compiled session submits a second, structured request only
+    // for an exact selected mechanism at this same generation.
+    const submitted = await sendSessionAction(session.id, trimmed, {
+      sessionKind: session.sessionKind,
+      ordinaryGeneration: session.ordinaryGeneration,
+      ...(session.sessionKind === 'compiled' ? { compiledGeneration: session.compiledGeneration } : {}),
+      pcId: 'p1',
+    })
+    if (submitted.kind === 'unresolved') {
+      const generation = compiledSessionGeneration(submitted.resolution, 'compiled')
+      if (generation !== null) session.compiledGeneration = generation
+      messages.value.push({ id: Date.now() + 1, type: 'system', speaker: '系统', content: compiledIntentMessage(submitted.resolution) })
+      return
+    }
+    if (submitted.kind === 'reconciled') {
+      applyRecoveredOrdinaryPending(submitted)
+      messages.value.push({ id: Date.now() + 1, type: 'system', speaker: '系统', content: '已同步先前已提交的动作；请确认新状态后再提交下一步。' })
+      return
+    }
+    const data = submitted.data
+    if (session.sessionKind === 'ordinary') {
+      ordinaryPendingKind.value = null
+      const generation = ordinarySessionGeneration(data, 'ordinary')
+      session.ordinaryGeneration = generation
+      session.luck = session.ruleset === 'cosmic-horror'
+        ? ordinaryLuckFromAuthoritativeState(data)
+        : null
+    } else if (submitted.kind === 'executed' && session.sessionKind === 'compiled') {
+      const generation = compiledSessionGeneration(data, 'compiled')
+      if (generation !== null) session.compiledGeneration = generation
+      session.luck = null
+    }
     const narrative = (data.narrative || '').trim()
     if (narrative) messages.value.push({ id: Date.now() + 1, type: 'narration', speaker: '守秘人', content: data.narrative })
     if (data.events) {
@@ -377,20 +1020,31 @@ async function submitAction(inputText, actingPc) {
     if (data.state?.companions) companions.value = data.state.companions
     if (data.state?.npcs) npcs.value = data.state.npcs
     if (data.state?.monsters) monsters.value = data.state.monsters
-    if (data.dead) { session.hp = 0; session.dead = true }
+    applyTerminalState(data)
     if (data.sanity) { session.san = data.sanity.currentSAN ?? session.san; session.maxSAN = data.sanity.maxSAN ?? session.maxSAN; session.tempInsanity = data.sanity.temporaryInsanity ?? false; session.indefInsanity = data.sanity.indefiniteInsanity ?? false }
-  } catch (e) { messages.value.push({ id: Date.now() + 2, type: 'system', speaker: '系统', content: '错误：' + (e.message || '请求失败') }) }
-  finally { loading.value = false; getSuggestions(session.id).then(s => suggestions.value = s).catch(() => {}) }
+  } catch (e) {
+    if (session.sessionKind === 'ordinary') {
+      resyncOrdinaryPendingAfterFailure()
+      applyOrdinaryErrorGeneration(e?.data)
+    } else if (session.sessionKind === 'compiled') {
+      const generation = compiledSessionGeneration(e?.data, 'compiled')
+      if (generation !== null) session.compiledGeneration = generation
+    }
+    messages.value.push({ id: Date.now() + 2, type: 'system', speaker: '系统', content: '错误：' + (e.message || '请求失败') })
+  }
+  finally { loading.value = false; refreshSuggestions().catch(() => {}) }
 }
 
 function newGame() {
-  Object.assign(session, { id: '', round: 0, scene: '', playerName: '', archetype: '', ruleset: '', hp: 0, maxHp: 0, san: 0, maxSAN: 0, tempInsanity: false, indefInsanity: false, dead: false })
+  // This is only a view indicator. The old session's durable request remains
+  // keyed in storage, while a subsequent startGame() re-syncs the new ID.
+  ordinaryPendingKind.value = null
+  Object.assign(session, { id: '', round: 0, scene: '', playerName: '', archetype: '', ruleset: '', hp: 0, maxHp: 0, san: 0, maxSAN: 0, tempInsanity: false, indefInsanity: false, dead: false, terminal: null, luck: null, sessionKind: '', ordinaryGeneration: null, compiledGeneration: null })
   messages.value = []; companions.value = []; npcs.value = []; monsters.value = []; history.value = []; historyIndex.value = -1
-  error.value = null; screen.value = 'start'; kpVisible.value = false; moduleEditorVisible.value = false; settingsVisible.value = false; savedSessions.value = []; suggestions.value = []; pcList.value = []; activePc.value = 0; charEditorVisible.value = false; npcChatVisible.value = false
+  error.value = null; screen.value = 'start'; kpVisible.value = false; moduleEditorVisible.value = false; settingsVisible.value = false; savedSessions.value = []; suggestions.value = []; pcList.value = []; activePc.value = 0; clearCharacterEditorState(); luckSpendAmount.value = ''
 }
 
 function toggleControl(companion) { if (!companion || loading.value) return; submitAction(companion.control === 'auto' ? '控制 ' + companion.name : '自动 ' + companion.name) }
-function chatNpc(npc) { chattingNpc.value = npc; npcChatVisible.value = true }
 function openCharCard(c) { selectedCompanion.value = c }
 function closeCharCard() { selectedCompanion.value = null }
 function focusInput() { nextTick(() => inputRef.value?.focus()) }
@@ -411,11 +1065,24 @@ function onInputKeydown(e) {
 </script>
 
 <template>
-  <div class="trpg-app" :class="{ 'screen--game': screen === 'game' }" :data-ruleset="activeThemeRuleset">
+  <div v-if="!ownerAuthenticated" class="owner-auth-gate">
+    <form class="owner-auth-gate__form" @submit.prevent="authenticateOwner">
+      <h1>Keeper access</h1>
+      <p>Enter the deployment bearer to open the owner console.</p>
+      <input v-model="ownerCredential" type="password" autocomplete="new-password" class="owner-auth-gate__input" :disabled="ownerAuthPending" aria-label="Owner bearer" />
+      <button class="btn btn--primary" type="submit" :disabled="ownerAuthPending || !ownerCredential">
+        {{ ownerAuthPending ? 'Verifying…' : 'Open owner console' }}
+      </button>
+      <p v-if="ownerAuthError" class="owner-auth-gate__error">{{ ownerAuthError }}</p>
+    </form>
+  </div>
+
+  <div v-else class="trpg-app" :class="{ 'screen--game': screen === 'game' }" :data-ruleset="activeThemeRuleset">
     <div v-if="screen === 'start'" class="start-screen">
       <div class="start-screen__inner">
+        <button class="owner-auth-gate__clear" @click="clearOwnerAccess">Clear owner access</button>
         <div class="start-screen__ornament top"></div>
-        <h1 class="start-screen__title">AI TRPG</h1>
+        <h1 class="start-screen__title">AI Narrator</h1>
         <p class="start-screen__subtitle">人工智能桌面角色扮演游戏</p>
         <p class="start-screen__desc">选择你的规则集，创建角色，开始冒险。<br/>宇宙恐怖适合洛夫克拉夫特式恐怖，D&D 适合奇幻冒险。</p>
         <div class="char-creation">
@@ -481,6 +1148,7 @@ function onInputKeydown(e) {
         <span class="scripted-bar__meta">{{ scriptedLines.length }} 行 · {{ scriptedFinished ? '已结束' : (scriptedPending ? '等待抉择' : '推进中…') }}</span>
         <button class="bgm-toggle" :class="{ 'bgm-toggle--on': !voiceMuted }" @click="voiceMuted = !voiceMuted">{{ voiceMuted ? '语音 关' : '语音 开' }}</button>
         <button class="scripted-bar__exit" @click="exitScripted">退出</button>
+        <button class="scripted-bar__exit" @click="clearOwnerAccess">Clear access</button>
       </header>
 
       <main class="scripted-log" ref="scriptedLogEl">
@@ -511,15 +1179,16 @@ function onInputKeydown(e) {
           <div class="stat"><span class="stat__label">HP</span><div class="stat__track"><div class="stat__fill" :style="{ width: hpPercent + '%', background: hpColor }"></div></div><span class="stat__num">{{ session.hp }}/{{ session.maxHp }}</span></div>
           <div class="stat"><span class="stat__label">SAN</span><div class="stat__track"><div class="stat__fill" :style="{ width: sanPercent + '%', background: sanColor }"></div></div><span class="stat__num">{{ session.san }}/{{ session.maxSAN }}</span></div>
           <span class="insanity-badge" :class="{ 'insanity-badge--active': hasInsanity }">{{ session.indefInsanity ? '不定疯狂' : session.tempInsanity ? '临时疯狂' : '清醒' }}</span>
-          <button class="kp-toggle-btn" @click="charEditorVisible = true" title="编辑角色">📝</button>
-          <button class="kp-toggle-btn" @click="kpVisible = !kpVisible" :class="{ 'kp-toggle-btn--active': kpVisible }" title="KP 控制台">📋</button>
+          <button v-if="ordinaryCharacterEditorVisibleForSession" class="kp-toggle-btn" :disabled="ordinaryCharacterEditorDisabled" @click="openOrdinaryCharacterEditor" title="编辑角色">📝</button>
+          <button v-if="session.sessionKind === 'ordinary'" class="kp-toggle-btn" @click="kpVisible = !kpVisible" :class="{ 'kp-toggle-btn--active': kpVisible }" title="KP 控制台">📋</button>
           <button class="kp-toggle-btn" @click="moduleEditorVisible = !moduleEditorVisible" :class="{ 'kp-toggle-btn--active': moduleEditorVisible }" title="模组编辑器">📦</button>
           <button class="kp-toggle-btn" @click="settingsVisible = !settingsVisible" :class="{ 'kp-toggle-btn--active': settingsVisible }" title="设置">⚙️</button>
+          <button class="kp-toggle-btn" @click="clearOwnerAccess" title="Clear owner access">↪</button>
         </div>
       </header>
 
-      <SceneOverview v-if="session.scene" :scene="sceneLabel" :npcs="npcs" :monsters="monsters" :companions="companions" @chat="(n) => { chattingNpc = n; npcChatVisible = true }" @inspect="(c) => { if (c._type === 'companion') openCharCard(c) }" />
-      <div v-if="session.id" class="suggestion-bar"><span class="suggestion-bar__hint">💡 你可以：</span><button v-for="s in suggestions" :key="s" class="suggestion-bar__chip" :disabled="loading" @click="submitAction(s)">{{ s }}</button></div>
+      <SceneOverview v-if="session.scene" :scene="sceneLabel" :npcs="npcs" :monsters="monsters" :companions="companions" @inspect="(c) => { if (c._type === 'companion') openCharCard(c) }" />
+      <div v-if="session.id" class="suggestion-bar"><span class="suggestion-bar__hint">💡 你可以：</span><button v-for="s in suggestions" :key="s" class="suggestion-bar__chip" :disabled="loading || sessionTerminal || ordinaryPendingKind" @click="submitAction(s)">{{ s }}</button></div>
       <CombatGrid v-if="companions.length > 0 || npcs.length > 0 || monsters.length > 0" :player="session" :companions="companions" :npcs="npcs" :monsters="monsters" @inspect="(e) => { if (e._type === 'companion') { const found = companions.find(c => c.id === e._id); if (found) openCharCard(found) } }" />
 
       <section class="companion-panel" :class="{ 'companion-panel--collapsed': !companionsExpanded }">
@@ -531,7 +1200,7 @@ function onInputKeydown(e) {
             <div class="companion-card__stat"><span class="companion-card__stat-label">HP</span><div class="companion-card__track companion-card__track--hp"><div class="companion-card__fill" :style="{ width: c.maxHp > 0 ? Math.max(0, Math.round((c.hp / c.maxHp) * 100)) + '%' : '0%', background: (c.maxHp > 0 && (c.hp / c.maxHp) <= 0.25) ? '#ff4757' : (c.maxHp > 0 && (c.hp / c.maxHp) <= 0.5) ? '#ffa502' : '#2ed573' }"></div></div><span class="companion-card__stat-num">{{ c.hp }}/{{ c.maxHp }}</span></div>
             <div class="companion-card__stat"><span class="companion-card__stat-label">士气</span><div class="companion-card__track companion-card__track--morale"><div class="companion-card__fill" :style="{ width: Math.max(0, Math.min(100, (c.morale / 10) * 100)) + '%', background: c.morale <= 2.5 ? '#ff4757' : c.morale <= 5 ? '#ffa502' : '#2ed573' }"></div></div><span class="companion-card__stat-num">{{ c.morale }}/10</span></div>
             <div class="companion-card__info-row"><span class="companion-card__info-tag">{{ positionLabel(c.position) }}</span><span class="companion-card__info-tag">{{ behaviorLabel(c.behavior) }}</span><span class="companion-card__info-tag companion-card__info-tag--weapon" v-if="c.inventory?.length">{{ c.inventory[0] }}</span></div>
-            <div class="companion-card__actions"><button class="companion-card__action-btn" :disabled="loading" @click="chatNpc(c)">💬</button><button class="companion-card__control-btn" :class="c.control === 'auto' ? 'companion-card__control-btn--takeover' : 'companion-card__control-btn--auto'" :disabled="loading" @click="toggleControl(c)">{{ c.control === 'auto' ? '🎮 接管' : '🤖 自动' }}</button></div>
+            <div class="companion-card__actions"><button class="companion-card__control-btn" :class="c.control === 'auto' ? 'companion-card__control-btn--takeover' : 'companion-card__control-btn--auto'" :disabled="loading" @click="toggleControl(c)">{{ c.control === 'auto' ? '🎮 接管' : '🤖 自动' }}</button></div>
           </div>
         </div>
       </section>
@@ -544,24 +1213,38 @@ function onInputKeydown(e) {
         </div>
       </main>
 
-      <div v-if="session.dead" class="death-overlay"><div class="death-overlay__inner"><p class="death-overlay__title">你已死亡</p><p class="death-overlay__desc">调查在此终止。</p><button class="btn btn--primary" @click="newGame">开始新游戏</button></div></div>
+      <div v-if="sessionTerminal" class="death-overlay"><div class="death-overlay__inner"><p class="death-overlay__title">{{ terminalTitle }}</p><p class="death-overlay__desc">{{ terminalDescription }}</p><button class="btn btn--primary" @click="newGame">开始新游戏</button></div></div>
 
-      <footer class="input-area" :class="{ 'input-area--dead': session.dead }">
+      <footer class="input-area" :class="{ 'input-area--dead': sessionTerminal }">
+        <p v-if="ordinaryPendingLabel" class="ordinary-pending" role="status">{{ ordinaryPendingLabel }}；普通操作控件已暂停。</p>
+        <form v-if="ordinaryPartyMemberCreateVisibleForSession" class="party-member-create" @submit.prevent="submitPartyMemberCreate">
+          <label class="party-member-create__label" for="ordinary-party-member-name">新增队友</label>
+          <input id="ordinary-party-member-name" v-model="partyMemberName" class="party-member-create__name" type="text" maxlength="128" :disabled="ordinaryPartyMemberCreateDisabled" aria-label="队友姓名" />
+          <select id="ordinary-party-member-archetype" v-model="partyMemberArchetype" class="party-member-create__archetype" :disabled="ordinaryPartyMemberCreateDisabled" aria-label="队友职业">
+            <option value="" disabled>选择职业</option>
+            <option v-for="archetype in archetypes" :key="archetype.id" :value="archetype.id">{{ archetype.label || archetype.id }}</option>
+          </select>
+          <button type="submit" class="btn party-member-create__submit" :disabled="ordinaryPartyMemberCreateDisabled">新增队友</button>
+        </form>
+        <form v-if="ordinaryLuckSpendVisibleForSession" class="luck-spend" @submit.prevent="submitLuckSpend">
+          <label class="luck-spend__label" for="ordinary-luck-spend">幸运 {{ session.luck }}</label>
+          <input id="ordinary-luck-spend" v-model="luckSpendAmount" class="luck-spend__amount" type="number" min="1" :max="session.luck" step="1" inputmode="numeric" :disabled="loading || sessionTerminal || ordinaryPendingKind || session.luck === 0" aria-label="花费幸运点数" />
+          <button type="submit" class="btn luck-spend__submit" :disabled="ordinaryLuckSpendDisabled">花费幸运</button>
+        </form>
         <form class="input-area__form" @submit.prevent="() => { submitAction(inputValue); inputValue = ''; focusInput() }">
-          <select v-if="pcList.length > 1" v-model.number="activePc" class="input-area__pc-select" :disabled="loading || session.dead"><option v-for="(pc, i) in pcList" :key="pc.id" :value="i">{{ pc.name }}</option></select>
-          <input ref="inputRef" v-model="inputValue" type="text" class="input-area__field" :disabled="loading || session.dead" :placeholder="session.dead ? '旅程已结束……' : (loading ? '守秘人正在思考……' : '输入你的行动……')" autocomplete="off" @keydown="onInputKeydown"/>
-          <button type="submit" class="btn btn--send" :disabled="loading || !inputValue.trim() || session.dead">发送</button>
+          <select v-if="pcList.length > 1" v-model.number="activePc" class="input-area__pc-select" :disabled="loading || sessionTerminal || ordinaryPendingKind"><option v-for="(pc, i) in pcList" :key="pc.id" :value="i">{{ pc.name }}</option></select>
+          <input ref="inputRef" v-model="inputValue" type="text" class="input-area__field" :disabled="loading || sessionTerminal || ordinaryPendingKind" :placeholder="sessionTerminal ? '旅程已结束……' : (loading ? '守秘人正在思考……' : '输入你的行动……')" autocomplete="off" @keydown="onInputKeydown"/>
+          <button type="submit" class="btn btn--send" :disabled="loading || !inputValue.trim() || sessionTerminal || ordinaryPendingKind">发送</button>
         </form>
         <button class="input-area__restart" @click="newGame" :disabled="loading">新游戏</button>
       </footer>
 
       <div v-if="showCharCard" class="char-card-overlay" @click.self="closeCharCard"><div class="char-card-modal" @click.stop><button class="char-card-modal__close" @click="closeCharCard">✕</button><h2 class="char-card-modal__name">{{ selectedCompanion?.name }}</h2></div></div>
 
-      <KPDashboard v-if="kpVisible" :session-id="session.id" @close="kpVisible = false"/>
+      <KPDashboard v-if="kpVisible && session.sessionKind === 'ordinary'" :session-id="session.id" :session-kind="session.sessionKind" :ordinary-generation="session.ordinaryGeneration" :pending-kind="ordinaryPendingKind" :busy="loading" :terminal="sessionTerminal ? session.terminal ?? { kind: 'legacy_unknown' } : null" @ordinary-message="submitOrdinaryKpMessage" @close="kpVisible = false"/>
       <ModuleEditor v-if="moduleEditorVisible" @close="moduleEditorVisible = false"/>
       <SettingsPanel v-if="settingsVisible" @close="settingsVisible = false"/>
-      <CharacterEditor v-if="charEditorVisible && session.id" :session-id="session.id" :character="{ name: session.playerName, archetype: session.archetype, hp: session.hp, maxHp: session.maxHp, luck: session.luck ?? 60, creditRating: session.creditRating ?? 30, skills: session.skills ?? {}, inventory: session.inventory ?? [], weapons: session.weapons ?? [], attributes: session.attributes ?? {} }" :sanity="{ currentSAN: session.san, maxSAN: session.maxSAN }" @close="charEditorVisible = false"/>
-      <NpcChat v-if="npcChatVisible && chattingNpc" :session-id="session.id" :npc="chattingNpc" @close="npcChatVisible = false"/>
+      <CharacterEditor v-if="charEditorVisible && session.id && ordinaryCharacterEditorVisibleForSession && charEditorCharacter" :session-id="session.id" :character="charEditorCharacter" :sanity="charEditorSanity" :busy="loading || charEditorOpening" :pending-kind="ordinaryPendingKind" :status="charEditorStatus" @close="charEditorVisible = false" @save="saveOrdinaryCharacterPatch"/>
     </div>
   </div>
 </template>
@@ -569,6 +1252,13 @@ function onInputKeydown(e) {
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0b1210; color: #d8e4dd; min-height: 100dvh; }
+.owner-auth-gate { min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: #0b1210; }
+.owner-auth-gate__form { width: min(420px, 100%); display: grid; gap: 12px; padding: 24px; border: 1px solid #294338; border-radius: 12px; background: #111b17; }
+.owner-auth-gate__form h1 { color: #a6cfb8; font-size: 1.4rem; }
+.owner-auth-gate__form p { color: #a8b8af; line-height: 1.5; }
+.owner-auth-gate__input { width: 100%; border: 1px solid #294338; border-radius: 6px; padding: 10px; background: #0d1612; color: #d8e4dd; }
+.owner-auth-gate__error { color: #ff8b8b; }
+.owner-auth-gate__clear { margin-left: auto; display: block; border: 1px solid var(--border-default); border-radius: 4px; padding: 4px 8px; color: var(--text-secondary); background: transparent; cursor: pointer; }
 .trpg-app[data-ruleset="cosmic-horror"] {
   --surface-page: #0b1210; --surface-panel: #111b17; --surface-sunken: #0d1612; --surface-elevated: #16231d;
   --text-primary: #d8e4dd; --text-secondary: #a8b8af; --text-muted: #84978d; --border-default: #294338;
@@ -692,6 +1382,16 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0b1210; colo
 .death-overlay__desc { color: var(--text-muted); margin-bottom: 24px; }
 .input-area { display: flex; gap: 8px; align-items: center; padding: 8px 0; }
 .input-area__form { display: flex; gap: 8px; align-items: center; flex: 1; }
+.luck-spend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.luck-spend__label { color: var(--accent-strong); font-size: 0.75rem; white-space: nowrap; }
+.luck-spend__amount { width: 5.5rem; padding: 6px 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--surface-sunken); color: var(--text-primary); }
+.luck-spend__amount:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.luck-spend__submit { padding: 6px 10px; font-size: 0.75rem; }
+.party-member-create { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.party-member-create__label { color: var(--accent-strong); font-size: 0.75rem; white-space: nowrap; }
+.party-member-create__name, .party-member-create__archetype { max-width: 9rem; padding: 6px 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--surface-sunken); color: var(--text-primary); }
+.party-member-create__submit { padding: 6px 10px; font-size: 0.75rem; }
+.ordinary-pending { width: 100%; margin: 0; color: var(--accent-strong); font-size: 0.75rem; }
 .input-area__pc-select { padding: 4px 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--surface-sunken); color: var(--text-primary); font-size: 0.8rem; cursor: pointer; }
 .input-area__field { flex: 1; padding: 8px 12px; background: var(--surface-sunken); border: 1px solid var(--border-default); border-radius: 8px; color: var(--text-primary); font-size: 1rem; outline: none; }
 .input-area__field:focus { border-color: var(--accent-strong); }

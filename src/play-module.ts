@@ -9,13 +9,14 @@ import { nameParts, mentionsName, knownNameVariants } from "./play/names";
 import { SanityEngine } from "./rules/coc-engine";
 import { BARN_OF_PREMIER, BARN_SUPPORT, renderPrologue, renderPartySetup, evaluateEpilogues } from "./module/barn-of-premier";
 import { WorldState } from "./world/state";
-import { PlayerAgent, createPlayerCharacter, setPlayerLLM, playerLLMConfigured } from "./agent/player-agent";
+import { PlayerAgent, createPlayerCharacter } from "./agent/player-agent";
 import { displayCharacterSheet, characterSummary } from "./pl/character-display";
 import type { ModuleData, ModuleSupport } from "./module/types";
 
 
 
-import { LLMClient, extractMessageContent } from "./llm/client";
+import { LLMClient } from "./llm/client";
+import { loadConfig } from "./config";
 import { extractJson } from "./llm/json";
 import { applyAllLlmExpandedWithLLM } from "./llm/generate-llm-expanded";
 import { analyzeThreats, getWeaponPolicy } from "./module/threat-analyzer";
@@ -47,6 +48,7 @@ import type { PlayEvent } from "./play/events";
 
 
 import { newCursor, newDedup, standing, type Cast, type WorldModelCtx } from "./play/run-state";
+import { advanceTime } from "./rules/game-time";
 
 
 
@@ -115,31 +117,19 @@ async function llmOnce(system: string, user: string, maxTokens = 500, purpose = 
   const done = (ok: boolean, reason: string) =>
     emit({ type: "llm-call", purpose, ok, reason, ms: Date.now() - t0 });
 
-  if (!llmEnabled()) { done(false, "llmEnabled() 为 false（无 key 或被 LLM_DISABLED 关掉）"); return ""; }
-  const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY;
+  const llmClient = runCtx.getStore()?.llmClient;
+  if (!llmEnabled() || !llmClient) {
+    done(false, "llmEnabled() 为 false（无 key、被 LLM_DISABLED 关掉，或本 run 显式离线）");
+    return "";
+  }
   try {
-    const baseUrl = process.env.LLM_BASE_URL || "https://api.openai.com/v1";
-    const model = process.env.LLM_MODEL || "gpt-4o-mini";
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        temperature: 0.85,
-        max_tokens: maxTokens,
-      }),
-      signal: AbortSignal.timeout(25000),
-    });
-    if (!resp.ok) {
-      done(false, `HTTP ${resp.status} ${resp.statusText}`);
-      return "";
-    }
-    const data = await resp.json();
-    const text = extractMessageContent(data).trim();
+    const text = (await llmClient.chat(
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      { temperature: 0.85, maxTokens, timeout: 25_000 },
+    )).trim();
     if (!text) { done(false, "响应里没有正文"); return ""; }
     done(true, "");
     return text;
@@ -436,7 +426,12 @@ async function createRandomPlayerSetup(
 // 引擎通用化：module 承载纯数据（场景/线索/NPC），support 承载模块专属钩子/常量
 // （SAN 映射、结局评估、战斗遭遇、枢纽/终局定位、调查员配置）。
 // 新模组接入 = 提供 ModuleData + ModuleSupport，无需改动引擎。
-interface RunOptions {
+export interface RunOptions {
+  /**
+   * The LLM client for this run. Omit it to build one from `loadConfig()`;
+   * pass null to force the complete run onto offline/template paths.
+   */
+  llmClient?: LLMClient | null;
   /**
    * 每产生一行播报就回调一次；CLI 传 console.log，API 会话推进消息流。
    *
@@ -467,12 +462,24 @@ export async function runModule(
   support: ModuleSupport,
   opts: RunOptions = {},
 ): Promise<{ lines: string[]; origins: LineOrigin[] }> {
+  // ModuleData is the source artifact (plain structured data), while one run
+  // may enrich NPC dialogue at runtime. Never let that run-owned enrichment
+  // become visible to another run that was handed the same source object.
+  // ModuleSupport deliberately stays shared: it contains callback functions
+  // and is read-only runtime policy rather than source module state.
+  const sessionModule = structuredClone(module);
+  // The environment gate is authoritative even for an injected test/run client:
+  // every consumer reads this one effective value from RunContext.
+  const llmClient = llmEnabled()
+    ? (opts.llmClient === undefined ? new LLMClient(loadConfig()) : opts.llmClient)
+    : null;
   const ctx: RunContext = {
+    llmClient,
     lines: [], origins: [],
     onLine: opts.onLine, onEvent: opts.onEvent, decide: opts.decide,
     wounds: new Map(),
   };
-  await runCtx.run(ctx, () => runModuleInner(module, support));
+  await runCtx.run(ctx, () => runModuleInner(sessionModule, support));
   return { lines: ctx.lines, origins: ctx.origins };
 }
 
@@ -489,11 +496,7 @@ async function runModuleInner(module: ModuleData, support: ModuleSupport) {
   const c2 = r2.pc;
 
   const san1 = new SanityEngine(c1.attributes.power ?? 50);
-  san1.state.currentSAN = c1.attributes.power ?? 50;
-  san1.state.maxSAN = c1.attributes.power ?? 50;
   const san2 = new SanityEngine(c2.attributes.power ?? 50);
-  san2.state.currentSAN = c2.attributes.power ?? 50;
-  san2.state.maxSAN = c2.attributes.power ?? 50;
 
   // 名字/角色卡/SAN 引擎三者一一对应，收成一个概念传给下游 ——
   // 散着传最容易出的错是错位：拿 p0 的名字配 c2 的角色卡，
@@ -581,30 +584,13 @@ async function runModuleInner(module: ModuleData, support: ModuleSupport) {
     cacheText: "",
   };
 
+  const llmClient = runCtx.getStore()?.llmClient ?? null;
   const pl1 = new PlayerAgent(createPlayerCharacter(
     c1, p0.name, p0.occupation, p0.personality, p0.background, p0.motive,
-  ));
+  ), llmClient);
   const pl2 = new PlayerAgent(createPlayerCharacter(
     c2, p1.name, p1.occupation, p1.personality, p1.background, p1.motive,
-  ));
-
-  const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || "";
-  const llmOk = llmEnabled(); // 判据见 llmEnabled —— 别再在这里重写一份
-  const llmClient: LLMClient | null = llmOk
-    ? new LLMClient({
-        apiKey,
-        baseUrl: process.env.LLM_BASE_URL || "https://api.openai.com/v1",
-        model: process.env.LLM_MODEL || "gpt-4o-mini",
-        maxTokens: parseInt(process.env.LLM_MAX_TOKENS || "1024"),
-        temperature: parseFloat(process.env.LLM_TEMPERATURE || "0.7"),
-      })
-    : null;
-
-  // 玩家 Agent 决策接缝：与 game-session 同一条注册规则（只在还没设过时设）。
-  // llmClient 是 LLMClient 才传；Mock/无 key 时不设，decideViaLLM 自会回落 fallback。
-  if (llmClient && !playerLLMConfigured()) {
-    setPlayerLLM(llmClient);
-  }
+  ), llmClient);
 
   // ── NPC 对话数据：LLM 可用时用 LLM 生成（覆盖模板生成，手写黄金标准不被覆盖） ──
   if (llmClient) {
@@ -672,34 +658,17 @@ async function runModuleInner(module: ModuleData, support: ModuleSupport) {
       `- 不得提前揭示案件真相、不得把调查员直接引向终局地点（如谷仓）、不得暗示结局`,
     ].join("\n");
 
-    // Try LLM
-    if (llmOk) {
+    // The prologue shares this run's client with the background, agents, NPCs,
+    // and combat narration; an explicit null remains offline.
+    if (llmClient) {
       try {
-        const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY;
-        const baseUrl = process.env.LLM_BASE_URL || "https://api.openai.com/v1";
-        const model = process.env.LLM_MODEL || "gpt-4o-mini";
-        const resp = await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: "你是一个 CoC 7e 跑团主持人。用中文输出，简洁克制，不分点不加注释。" },
-              { role: "user", content: prompt },
-            ],
-            temperature: 0.8,
-            max_tokens: 500,
-          }),
-          signal: AbortSignal.timeout(20000),
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          const content = extractMessageContent(data).trim();
-          if (content) {
-            const lines = content.split("\n").filter(l => l.trim()).map(l => l.trim());
-            // 世界模型约束：开场叙事不得含时代科技/ meta 词汇，命中 → 降级模块文案
-            if (lines.every(l => !checkDialogueText(l))) return lines;
-          }
+        const content = (await llmClient.chat([
+          { role: "system", content: "你是一个 CoC 7e 跑团主持人。用中文输出，简洁克制，不分点不加注释。" },
+          { role: "user", content: prompt },
+        ], { temperature: 0.8, maxTokens: 500, timeout: 20_000 })).trim();
+        if (content) {
+          const lines = content.split("\n").filter(l => l.trim()).map(l => l.trim());
+          if (lines.every(l => !checkDialogueText(l))) return lines;
         }
       } catch { /* fall through */ }
     }
@@ -762,6 +731,8 @@ async function runModuleInner(module: ModuleData, support: ModuleSupport) {
 
   while (!cursor.done && cursor.rounds < 40) {
     cursor.rounds++;
+    // CLI/module runner 与 GameSession 共用同一确定性时钟；每个主循环回合只推进一次。
+    cursor.gameTime = advanceTime(cursor.gameTime);
     const currentId = world.currentSceneId;
     recentSceneIds.push(currentId);
     if (recentSceneIds.length > 5) recentSceneIds.shift();

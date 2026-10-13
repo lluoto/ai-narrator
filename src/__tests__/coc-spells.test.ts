@@ -3,7 +3,6 @@
 
 import { describe, it, expect, beforeEach } from "bun:test";
 import { GameSession } from "../api/game-session";
-import { MYTHOS_TOMES } from "../rules/mythos-expansion";
 
 
 let session: GameSession;
@@ -17,7 +16,7 @@ beforeEach(() => {
     model: "mock",
     maxTokens: 1024,
     temperature: 0.7,
-  }, undefined, "调查员");
+  }, "investigator", "调查员");
 });
 
 // ============================================================
@@ -25,86 +24,47 @@ beforeEach(() => {
 // ============================================================
 
 describe("神话典籍阅读", () => {
-  it("阅读死灵之书应触发 SAN 检定并学会法术", async () => {
+  it("未安装的旧目录名字不能产生 SAN 或 CM 副作用", async () => {
+    const before = session.exportOrdinarySessionSnapshot().state.sanities.find((entry) => entry.pcId === "p1")!.state;
     const res = await session.act("阅读死灵之书");
-    expect(res).toBeDefined();
-
-    // 应有 SAN 损失事件
-    const sanEvent = res.events.find(e => e.content.includes("SAN"));
-    expect(sanEvent).toBeDefined();
-
-    // 应有学会法术的提示
-    const learnEvent = res.events.find(e =>
-      e.content.includes("学会") || e.content.includes("领悟") || e.content.includes("法术")
-    );
-    expect(learnEvent).toBeDefined();
+    const after = session.exportOrdinarySessionSnapshot().state.sanities.find((entry) => entry.pcId === "p1")!.state;
+    expect(after).toEqual(before);
+    expect(res.events.map(e => e.content).join("\n")).toContain("没有已安装模组声明");
   });
 
-  it("两次阅读死灵之书不崩溃", async () => {
-    const res1 = await session.act("阅读死灵之书");
-    const res2 = await session.act("阅读死灵之书");
-    expect(res1).toBeDefined();
-    expect(res2).toBeDefined();
+  it("阿卡姆典籍仅在其真实保险库位置触发声明的 SAN/CM 结算", async () => {
+    await session.act("加载模组 阿卡姆档案检查");
+    const remote = await session.act("阅读塞拉伊诺断章");
+    expect(remote.events.map(e => e.content).join("\n")).toContain("不在你当前场景或背包中");
+
+    const moved = await session.act("前往 arkham_library_vault");
+    expect(moved.error).toBeUndefined();
+    expect(session.getPlayerPosition()).toBe("arkham_library_vault");
+    const res = await session.act("阅读塞拉伊诺断章");
+    expect(res.events.map(e => e.content).join("\n")).toMatch(/SAN|克苏鲁神话技能提升/);
   });
 
-  it("阅读全部 5 本典籍均触发 SAN 检定和 CM 成长", async () => {
-    // 标题说「全部 5 本」，那就先确认典籍表真的是 5 本 ——
-    // 手写的名单和真实数据分叉时，这条会红在该红的地方。
-    expect(MYTHOS_TOMES.length).toBe(5);
-    const allTomes = ["死灵之书", "无名祭祀书", "黄衣之王", "塞拉伊诺断章", "阿卡姆特集"];
-    // 将额外典籍加入当前场景
-    const items: string[] = (session as any).sceneItems.get("farm_exterior") ?? [];
-    for (const t of allTomes) {
-      if (!items.includes(t)) items.push(t);
+  it("印斯茅斯的真实典籍使用模块声明的法术，而不是自由创建法术", async () => {
+    await session.act("加载模组 印斯茅斯的阴影");
+    expect(session.getPlayerPosition()).toBe("innsmouth_docks");
+    const originalRandom = Math.random;
+    try {
+      Math.random = () => 0;
+      const res = await session.act("阅读扎多克的低语");
+      expect(res.events.map(e => e.content).join("\n")).toContain("克苏鲁神话技能提升+1%");
+    } finally {
+      Math.random = originalRandom;
     }
-
-    for (const tome of allTomes) {
-      const res = await session.act(`阅读${tome}`);
-      // 消费事件列表（可能有 SAN + 系统两条事件）
-      const content = res.events.map(e => e.content).join("\n");
-      expect(content).toMatch(/SAN/);
-      expect(content).toMatch(/克苏鲁神话技能提升/);
-    }
+    expect(session.exportOrdinarySessionSnapshot().state.knownMythosSpells).toContain("接触大衮");
+    const cast = await session.act("施展接触大衮");
+    expect(cast.events.map(e => e.content).join("\n")).toContain("你尝试施展「接触大衮」");
   });
 
-  it("阿卡姆特集无法术可学但触发 CM 成长", async () => {
-    const items: string[] = (session as any).sceneItems.get("farm_exterior") ?? [];
-    if (!items.includes("阿卡姆特集")) items.push("阿卡姆特集");
-
-    const res = await session.act("阅读阿卡姆特集");
-    const content = res.events.map(e => e.content).join("\n");
-    expect(content).toMatch(/克苏鲁神话技能提升/);
-    // 阿卡姆特集无法术，不应出现"学会了"字样
-    expect(content).not.toMatch(/领悟/);
-  });
-
-  it("死灵之书阅读可选法术较多（7 个注册到 ensureSpellRegistered）", async () => {
-    const items: string[] = (session as any).sceneItems.get("farm_exterior") ?? [];
-    if (!items.includes("死灵之书")) items.push("死灵之书");
-
-    const res = await session.act("阅读死灵之书");
-    const content = res.events.map(e => e.content).join("\n");
-    // 应有法术学习事件
-    expect(content).toMatch(/法术|领悟/);
-  });
-
-  it("阅读时的典籍列举：场景中有典籍但未指定时列出", async () => {
-    // 让场景中没有典籍，只保留普通物品
-    // 先清除，再加入一个非典籍物品
-    const items: string[] = (session as any).sceneItems.get("farm_exterior") ?? [];
-    // 确保场景中至少有 1 个非典籍物品
-    if (!items.includes("铁制钥匙")) items.push("铁制钥匙");
-    // 移除所有典籍
-    const toRemove = ["死灵之书", "无名祭祀书", "黄衣之王", "塞拉伊诺断章", "阿卡姆特集"];
-    for (const t of toRemove) {
-      const idx = items.indexOf(t);
-      if (idx >= 0) items.splice(idx, 1);
-    }
-    // 读一个不在典籍表中的物品
+  it("阅读不在模组声明中的普通物品只给出拒绝，不猜测典籍定义", async () => {
     const res = await session.act("阅读铁制钥匙");
-    // 不应提示"这里有典籍"，因为铁制钥匙不是典籍
     const content = res.events.map(e => e.content).join("\n");
-    expect(content).not.toMatch(/这里有/);
+    expect(content).toContain("没有已安装模组声明");
+    expect(content).not.toMatch(/SAN|克苏鲁神话技能提升/);
   });
 });
 
@@ -122,14 +82,26 @@ describe("剧本杀模组导入", () => {
   });
 
   it("从自定义模组库加载模组后应注册法术并放置物品", async () => {
-    const res = await session.act("加载模组 普瑞米尔的谷仓");
-    expect(res).toBeDefined();
-    const content = res.events.map(e => e.content).join("\n");
-    expect(content).toMatch(/注册|放置|生成|已加载/);
+    const verifier = new GameSession("spell-module-snapshot", "cosmic-horror", {
+      apiKey: "sk-placeholder",
+      baseUrl: "http://localhost:9999",
+      model: "mock",
+      maxTokens: 1024,
+      temperature: 0.7,
+    }, "investigator", "Ada");
+    try {
+      const res = await verifier.act("加载模组 普瑞米尔的谷仓");
+      expect(res).toBeDefined();
+      const content = res.events.map(e => e.content).join("\n");
+      expect(content).toMatch(/注册|放置|生成|已加载/);
 
-    // 法术应已注册
-    const spellMap: Map<string, any> = (session as any).mythosSpells;
-    expect(spellMap.has("僵尸创造术")).toBe(true);
+      // The session owns its runtime map; its supported snapshot confirms the
+      // module registered the canonical definition without exposing the map.
+      expect(verifier.exportOrdinarySessionSnapshot().state.mythosSpells
+        .some((spell) => spell.name === "僵尸创造术")).toBe(true);
+    } finally {
+      verifier.close();
+    }
   });
 
   it("同一个模组不应重复加载", async () => {

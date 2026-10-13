@@ -18,16 +18,28 @@
 // bun test src/__tests__/ws-broadcast-per-player-visibility.test.ts
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { GameSession } from "../api/game-session";
+import { GameSession, type ActionResponse } from "../api/game-session";
 import { runAction, broadcastActionResult } from "../api/server";
 import { createWsClient, removeWsClient, listSessionPlayerIds } from "../api/ws-handler";
+import { restoreSignedOrdinaryWorld } from "./helpers/ordinary-world-fixture";
 import type { ServerWebSocket } from "bun";
 import type { WsConnectionData } from "../api/ws-handler";
+import { compiledModuleHttpFixture } from "./helpers/compiled-module-http-fixture";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 512, temperature: 0.7,
 };
+const TRANSIENT_RUNTIME = { careerEntryPersistence: "transient" } as const;
+
+const TransientGameSession = new Proxy(GameSession, {
+  construct(target, args, newTarget) {
+    const forwarded = [...args];
+    const runtime = forwarded[9] as Record<string, unknown> | undefined;
+    forwarded[9] = { ...runtime, careerEntryPersistence: "transient" };
+    return Reflect.construct(target, forwarded, newTarget);
+  },
+});
 
 /** 一个只有 send() 的假连接，捕获发给它的每一条消息（不真的开 socket/端口）。 */
 function fakeSocket() {
@@ -42,7 +54,8 @@ afterEach(() => {
 });
 
 async function twoPcArenaAt(sceneName: string) {
-  const session: any = new GameSession(`ws-vis-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员");
+  const GameSession = TransientGameSession;
+  const session: any = new GameSession(`ws-vis-${Math.random()}`, "cosmic-horror", CFG, undefined, "调查员", undefined, undefined, undefined, "preferred", TRANSIENT_RUNTIME);
   await session.act("创建角色 investigator 甲"); // p1
   await session.act("创建队友 乙 investigator"); // p2
   await session.act("加载模组 普瑞米尔的谷仓");
@@ -151,5 +164,173 @@ describe("todo-25：action-result 按连接过滤，不再对 session 内所有�
 
     expect(anon.sent.length).toBe(0);
     expect(bogus.sent.length).toBe(0);
+  });
+});
+
+// Ordinary terminality is not reducible to `dead`: an ordinary module
+// departure is terminal while `dead === false`. Keep this at the existing
+// per-connection broadcaster boundary, where the former hand-written view
+// had dropped the new discriminant for every WebSocket-only client.
+describe("ordinary action-result terminal projection", () => {
+  async function depart(session: GameSession): Promise<ActionResponse> {
+    await session.act("\u52a0\u8f7d\u6a21\u7ec4 \u666e\u745e\u7c73\u5c14\u7684\u8c37\u4ed3");
+    await session.act("\u6211\u4eec\u51b3\u5b9a\u79bb\u5f00\u8fd9\u91cc\uff0c\u7ed3\u675f\u8fd9\u6b21\u8c03\u67e5");
+    return session.act("\u786e\u5b9a");
+  }
+
+  function lastActionData(socket: ReturnType<typeof fakeSocket>): Record<string, unknown> {
+    const message = socket.sent.at(-1);
+    expect(message?.event).toBe("action-result");
+    return message.data as Record<string, unknown>;
+  }
+
+  it("delivers the exact non-death departure terminal to KP, observer, and the authorized player", async () => {
+    const GameSession = TransientGameSession;
+    const session = new GameSession("ws-terminal-departure", "cosmic-horror", CFG, "detective", "\u8c03\u67e5\u5458");
+    const sessionId = session.id!;
+    const kp = fakeSocket();
+    const observer = fakeSocket();
+    const player = fakeSocket();
+    createWsClient(kp.ws, sessionId, "kp");
+    createWsClient(observer.ws, sessionId, "observer");
+    createWsClient(player.ws, sessionId, "player", "p1");
+    liveClients.push(kp.ws, observer.ws, player.ws);
+
+    try {
+      const before = priorCounts(sessionId, session);
+      const result = await depart(session);
+      expect(result).toMatchObject({ dead: false, terminal: { kind: "module_departure" } });
+      if (result.terminal?.kind !== "module_departure") throw new Error("expected ordinary departure terminal");
+      broadcastActionResult(sessionId, session, before, result);
+
+      for (const socket of [kp, observer, player]) {
+        const data = lastActionData(socket);
+        expect(data.dead).toBe(false);
+        // Identity and display name are distinct durable fields; neither may
+        // disappear behind the legacy `dead` compatibility flag.
+        expect(data.terminal).toEqual(result.terminal);
+        expect(data.terminal).toMatchObject({
+          kind: "module_departure",
+          endingId: result.terminal.endingId,
+          endingName: result.terminal.endingName,
+        });
+      }
+    } finally {
+      session.close();
+    }
+  });
+
+  it("delivers a real ordinary death terminal rather than treating all terminal states as departure", async () => {
+    let session = new GameSession("ws-terminal-death", "cosmic-horror", CFG, "detective", "\u8c03\u67e5\u5458");
+    const sessionId = session.id!;
+    const kp = fakeSocket();
+    const observer = fakeSocket();
+    const player = fakeSocket();
+    createWsClient(kp.ws, sessionId, "kp");
+    createWsClient(observer.ws, sessionId, "observer");
+    createWsClient(player.ws, sessionId, "player", "p1");
+    liveClients.push(kp.ws, observer.ws, player.ws);
+    const previousRandom = Math.random;
+
+    try {
+      const prepared = new GameSession(session.id, "cosmic-horror", CFG);
+      try {
+        restoreSignedOrdinaryWorld(prepared, CFG, (world) => {
+          const scene = world.getCurrentState().scene;
+          world.upsertEntity({
+            id: "ws-terminal-death-monster", name: "ws terminal monster", type: "monster",
+            hp: 200, maxHp: 200, ac: 0, status: [], position: scene, scene_id: scene,
+          });
+        }, session);
+      } catch (error) {
+        prepared.close();
+        throw error;
+      }
+      session.close();
+      session = prepared;
+      expect(session.setPlayerHp("p1", 1)).toMatchObject({ ok: true });
+      const rolls = [0, 0, 0.99, 0, 0, 0.99, 0, 0, 0, 0.99, 0.99];
+      let index = 0;
+      Math.random = () => rolls[index++] ?? 0.99;
+      const before = priorCounts(sessionId, session);
+      const death = await session.act("\u653b\u51fb ws terminal monster");
+      expect(death).toMatchObject({ dead: true, terminal: { kind: "death" } });
+      broadcastActionResult(sessionId, session, before, death);
+
+      for (const socket of [kp, observer, player]) {
+        const data = lastActionData(socket);
+        expect(data.dead).toBe(true);
+        expect(data.terminal).toEqual({ kind: "death" });
+      }
+    } finally {
+      Math.random = previousRandom;
+      session.close();
+    }
+  });
+
+  it("sends explicit terminal:null for a live ordinary action, never a stale terminal from an earlier result", async () => {
+    const session = new GameSession("ws-terminal-live", "cosmic-horror", CFG, "detective", "\u8c03\u67e5\u5458");
+    const sessionId = session.id!;
+    const player = fakeSocket();
+    createWsClient(player.ws, sessionId, "player", "p1");
+    liveClients.push(player.ws);
+
+    try {
+      const before = priorCounts(sessionId, session);
+      const live = await session.act("observe");
+      expect(live.terminal).toBeNull();
+      broadcastActionResult(sessionId, session, before, live);
+      const data = lastActionData(player);
+      expect(Object.hasOwn(data, "terminal")).toBe(true);
+      expect(data.terminal).toBeNull();
+    } finally {
+      session.close();
+    }
+  });
+
+  it("does not guess terminal:null for a legacy ordinary response that never declared terminal", async () => {
+    const session = new GameSession("ws-terminal-legacy", "cosmic-horror", CFG, "detective", "\u8c03\u67e5\u5458");
+    const sessionId = session.id!;
+    const player = fakeSocket();
+    createWsClient(player.ws, sessionId, "player", "p1");
+    liveClients.push(player.ws);
+
+    try {
+      const before = priorCounts(sessionId, session);
+      const current = await session.act("observe");
+      const { terminal: _removedTerminal, ...legacyResponse } = current;
+      broadcastActionResult(sessionId, session, before, legacyResponse);
+      const data = lastActionData(player);
+      expect(Object.hasOwn(data, "terminal")).toBe(false);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("does not invent an ordinary terminal field for a real compiled action response", async () => {
+    const session = new GameSession("ws-terminal-compiled", "cosmic-horror", CFG, "detective", "\u8c03\u67e5\u5458");
+    const sessionId = session.id!;
+    const kp = fakeSocket();
+    createWsClient(kp.ws, sessionId, "kp");
+    liveClients.push(kp.ws);
+    try {
+      const fixture = await compiledModuleHttpFixture("ws-terminal-compiled");
+      expect(session.loadCompiledModule(fixture.resolved.artifact.payload as any, fixture.projection).status).toBe("loaded");
+      const state = session.getState();
+      const compiledResponse = {
+        narrative: "compiled action",
+        events: [],
+        state,
+        dead: false,
+        // A forged ordinary discriminant must not cross the compiled boundary
+        // merely because ActionResponse is shared by both session kinds.
+        terminal: { kind: "module_departure" as const, endingId: "forged", endingName: "forged" },
+      } as ActionResponse;
+      broadcastActionResult(sessionId, session, new Map(), compiledResponse);
+      const data = lastActionData(kp);
+      expect(Object.hasOwn(data, "terminal")).toBe(false);
+    } finally {
+      session.close();
+    }
   });
 });

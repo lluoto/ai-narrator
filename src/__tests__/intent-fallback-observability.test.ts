@@ -9,7 +9,8 @@
 // 每条用例后必须还原，否则会影响其它测试文件的意图解析行为。
 
 import { describe, test, expect, spyOn, beforeEach, afterEach } from "bun:test";
-import { setIntentLLM } from "../llm/intent";
+import { parseIntentWithLLM, setIntentLLM } from "../llm/intent";
+import { LLMClient } from "../llm/client";
 import { log } from "../log";
 import type { ActionIntent } from "../types";
 
@@ -41,7 +42,8 @@ describe("parseIntent 的静默回落改成 log.warn（任务1：只做可观测
     const scopes = calls.map((c: any[]) => c[0]);
     expect(scopes).toContain("intent");
     const messages = calls.map((c: any[]) => c[1] as string).join("\n");
-    expect(messages).toContain("ECONNREFUSED 测试用异常原因");
+    expect(messages).toContain("code=intent_request_failed");
+    expect(messages).not.toContain("ECONNREFUSED 测试用异常原因");
     warnSpy.mockRestore(); // 检查完毕再还原，别在还没读 mock.calls 前就清了它
   });
 
@@ -56,7 +58,8 @@ describe("parseIntent 的静默回落改成 log.warn（任务1：只做可观测
     const scopes = calls.map((c: any[]) => c[0]);
     expect(scopes).toContain("intent");
     const messages = calls.map((c: any[]) => c[1] as string).join("\n");
-    expect(messages).toContain("这不是合法JSON");
+    expect(messages).toContain("code=intent_reply_invalid");
+    expect(messages).not.toContain("这不是合法JSON");
     warnSpy.mockRestore();
   });
 
@@ -80,6 +83,31 @@ describe("parseIntent 的静默回落改成 log.warn（任务1：只做可观测
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+});
+
+test("provider error bodies and player text are not retained in fallback warnings", async () => {
+  const warnSpy = spyOn(log, "warn");
+  const previousFetch = globalThis.fetch;
+  const playerSecret = "PLAYER_PRIVATE_INPUT_9f1a";
+  const providerSecret = "PROVIDER_RESPONSE_SECRET_7c2e";
+  globalThis.fetch = (async () => new Response(providerSecret, { status: 400 })) as unknown as typeof fetch;
+  try {
+    const result = await parseIntentWithLLM(`攻击 哥布林 ${playerSecret}`, new LLMClient({
+      apiKey: "sk-observability-test-key",
+      baseUrl: "http://intent-observability.invalid/v1",
+      model: "test",
+      maxTokens: 8,
+      temperature: 0,
+    }));
+    expect(result.action).toBe("attack");
+    const messages = warnSpy.mock.calls.map((call: any[]) => String(call[1])).join("\n");
+    expect(messages).toContain("code=intent_http_error");
+    expect(messages).not.toContain(playerSecret);
+    expect(messages).not.toContain(providerSecret);
+  } finally {
+    globalThis.fetch = previousFetch;
+    warnSpy.mockRestore();
+  }
 });
 
 // ── 修 A · 任务 1：围栏解析收敛到 extractJson，intent.ts 的裸 parse 是根因 ──
@@ -117,5 +145,109 @@ describe("围栏包裹的合法 JSON 必须解析成功（正例，用实跑原�
     setIntentLLM(fakeClient(async () => JSON.stringify({ action: "look" })));
     const result: ActionIntent = await parseIntent("环顾四周");
     expect(result.action).toBe("look");
+  });
+});
+
+// The ordinary-session reply is deliberately a narrow, typed ActionIntent
+// projection.  This is separate from compiled-action-intent: normal sessions
+// still have their established regex degradation path, but a model reply must
+// not be allowed to smuggle arbitrary properties into a handler.
+describe("普通 ActionIntent 的 LLM reply 边界", () => {
+  test("保留攻击、施法和购买处理器实际消费的已验证字段", async () => {
+    const replies = [
+      {
+        action: "attack",
+        target: "哥布林",
+        method: "aimed",
+        weapon: "longbow",
+        weaponName: ".38左轮",
+        luckSpend: 5,
+        calledShot: "头部",
+      },
+      { action: "cast", spell: "魔法飞弹" },
+      { action: "buy", item: "急救包" },
+    ];
+    setIntentLLM(fakeClient(async () => JSON.stringify(replies.shift())));
+
+    const attack = await parseIntent("任意攻击描述");
+    const cast = await parseIntent("任意施法描述");
+    const buy = await parseIntent("任意购买描述");
+
+    expect(attack).toMatchObject({
+      action: "attack",
+      target: "哥布林",
+      method: "aimed",
+      weapon: "longbow",
+      weaponName: ".38左轮",
+      luckSpend: 5,
+      calledShot: "头部",
+    });
+    expect(cast).toMatchObject({ action: "cast", spell: "魔法飞弹" });
+    expect(buy).toMatchObject({ action: "buy", item: "急救包" });
+  });
+
+  test("对象 target 不会被强转后送入处理器，而是告警并回落 regex", async () => {
+    const warnSpy = spyOn(log, "warn");
+    try {
+      setIntentLLM(fakeClient(async () => JSON.stringify({ action: "attack", target: { id: "goblin" } })));
+      const result = await parseIntent("攻击哥布林");
+
+      expect(result).toMatchObject({ action: "attack", target: "哥布林" });
+      expect(warnSpy).toHaveBeenCalledWith("intent", expect.stringContaining("无效"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("字符串 luckSpend 不会被当作可执行数值，而是告警并回落 regex", async () => {
+    const warnSpy = spyOn(log, "warn");
+    try {
+      setIntentLLM(fakeClient(async () => JSON.stringify({ action: "attack", luckSpend: "5" })));
+      const result = await parseIntent("燃运5 攻击哥布林");
+
+      expect(result).toMatchObject({ action: "attack", luckSpend: 5 });
+      expect(warnSpy).toHaveBeenCalledWith("intent", expect.stringContaining("无效"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("未知 action 不会进入 handler，而是告警并回落 regex", async () => {
+    const warnSpy = spyOn(log, "warn");
+    try {
+      setIntentLLM(fakeClient(async () => JSON.stringify({ action: "execute_anything" })));
+      const result = await parseIntent("查看背包");
+
+      expect(result.action).toBe("inventory");
+      expect(warnSpy).toHaveBeenCalledWith("intent", expect.stringContaining("无效"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("额外字段（包括结局字段）使整条 reply 无效，不能静默忽略", async () => {
+    const warnSpy = spyOn(log, "warn");
+    try {
+      setIntentLLM(fakeClient(async () => JSON.stringify({ action: "status", endingId: "forged-ending" })));
+      const result = await parseIntent("查看背包");
+
+      expect(result.action).toBe("inventory");
+      expect(warnSpy).toHaveBeenCalledWith("intent", expect.stringContaining("无效"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("显式加载模组前缀仍绕过模型", async () => {
+    let calls = 0;
+    setIntentLLM(fakeClient(async () => {
+      calls++;
+      return JSON.stringify({ action: "attack" });
+    }));
+
+    const result = await parseIntent("加载模组 阿卡姆档案检查");
+
+    expect(result.action).toBe("load_module");
+    expect(calls).toBe(0);
   });
 });

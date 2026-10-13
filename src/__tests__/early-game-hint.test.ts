@@ -15,6 +15,7 @@ import { describe, it, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
 import { extractLocationHint } from "../investigation/clue-match";
 import { BARN_SUPPORT } from "../module/barn-of-premier";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
@@ -111,7 +112,101 @@ describe("没有 ModuleSupport 的模组：已发现/可匹配线索总数 < 1/3
     const s = makeSession(`arkham-early-${Math.random()}`);
     await s.act("加载模组 阿卡姆档案检查");
     expect(s.isEarlyGame()).toBe(true);
-    s.investigation.markDiscovered("restricted_section", "p1");
+    expect(activateRegisteredGameSessionSceneForTest(s, "arkham_miskatonic")).toBe(true);
+    const real = Math.random;
+    Math.random = () => 0;
+    try {
+      expect((await s.act("调查", "p1")).error).toBeUndefined();
+    } finally { Math.random = real; }
     expect(s.isEarlyGame()).toBe(false);
   });
 });
+
+const EARLY_HINT = "卫生间那边似乎还有些什么";
+const GENERIC_FAILURE = "你仔细搜查了一番，但这次没能看出什么名堂。";
+
+type EarlyGameShadow = {
+  label: string;
+  value: () => boolean | undefined;
+};
+
+const EARLY_GAME_SHADOWS: readonly EarlyGameShadow[] = [
+  { label: "fake-true", value: () => true },
+  { label: "fake-false", value: () => false },
+  { label: "no-op", value: () => undefined },
+  { label: "throwing", value: () => { throw new Error("forged early-game predicate"); } },
+];
+
+async function preparedEarlyHintSession(kind: "early" | "non-early", id: string): Promise<GameSession> {
+  const session = makeSession(id);
+  await session.act("加载模组 普瑞米尔的谷仓");
+  if (kind === "non-early") (session as any).movePlayerToScene("艾德里安的农场");
+  (session as any).movePlayerToScene("加比的拖车房");
+  expect(session.isEarlyGame()).toBe(kind === "early");
+  return session;
+}
+
+async function expectCanonicalFailedHint(
+  session: GameSession,
+  kind: "early" | "non-early",
+): Promise<void> {
+  const beforeRound = session.round;
+  const beforeFailures = session.world.getClueFailCount("clue_drugs");
+  const realRandom = Math.random;
+  Math.random = () => 0.99;
+  try {
+    const response = await session.act("检查卫生间", "p1");
+    expect(response.error).toBeUndefined();
+    expect(response.state.round).toBe(beforeRound + 1);
+    // clue_drugs is not a core clue in this published module; failed probing
+    // deliberately leaves its failback counter unchanged.  Keep that existing
+    // rule visible while proving the hint branch cannot change it.
+    expect(session.world.getClueFailCount("clue_drugs")).toBe(beforeFailures);
+    expect(session.exportOrdinarySessionSnapshot().world.tables.clue_discoveries
+      .some((entry) => entry.clue_id === "clue_drugs")).toBe(false);
+    if (kind === "early") {
+      expect(response.narrative).toContain(EARLY_HINT);
+      expect(response.narrative).not.toContain("毒品");
+    } else {
+      expect(response.narrative).toContain(GENERIC_FAILURE);
+      expect(response.narrative).not.toContain(EARLY_HINT);
+    }
+    // A throwing decoy used to escape resolveSceneClue(), fail-stop the outer
+    // action, and retire the session. The canonical hint projection is only
+    // availability/presentation authority, so the next ordinary turn remains
+    // available after every shadow attempt.
+    expect((await session.act("/help", "p1")).error).toBeUndefined();
+  } finally {
+    Math.random = realRandom;
+  }
+}
+
+for (const scope of ["own", "prototype"] as const) {
+  for (const kind of ["early", "non-early"] as const) {
+    for (const shadow of EARLY_GAME_SHADOWS) {
+      it(`does not let a ${scope} ${shadow.label} isEarlyGame shadow alter or DoS ${kind} failed-clue hints`, async () => {
+        const session = await preparedEarlyHintSession(kind, `early-hint-${scope}-${shadow.label}-${kind}-${crypto.randomUUID()}`);
+        const descriptor = scope === "prototype" ? Object.getOwnPropertyDescriptor(GameSession.prototype, "isEarlyGame") : undefined;
+        if (scope === "prototype" && !descriptor) throw new Error("fixture requires the public isEarlyGame wrapper");
+        try {
+          if (scope === "own") {
+            Object.defineProperty(session, "isEarlyGame", { configurable: true, value: shadow.value });
+            // Public observation stays ordinary JavaScript; only internal
+            // hint selection is sealed to the canonical world projection.
+            if (shadow.label === "fake-false") expect((session as any).isEarlyGame()).toBe(false);
+          } else {
+            Object.defineProperty(GameSession.prototype, "isEarlyGame", {
+              configurable: true,
+              writable: true,
+              value: shadow.value,
+            });
+          }
+          await expectCanonicalFailedHint(session, kind);
+        } finally {
+          if (scope === "prototype") Object.defineProperty(GameSession.prototype, "isEarlyGame", descriptor!);
+          session.close();
+        }
+      });
+    }
+  }
+}

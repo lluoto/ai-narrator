@@ -13,7 +13,8 @@ import {
   type ResolvedCompilerArtifactPayload,
 } from "../compiler/compiler-artifact";
 import { compilerArtifactNodeFileOps, loadCompilerArtifact, saveCompilerArtifact } from "../compiler/compiler-artifact-store";
-import { type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
+import { MODULE_COMPILE_HINTS_SCHEMA_VERSION, type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
+import { buildPreparedSourceFactDispositionReport } from "../compiler/source-fact-disposition";
 import {
   prepareCompilerProcessSimulation,
   resolveCompilerProcessSimulation,
@@ -67,11 +68,19 @@ function hints(value: PreparedCompilerProcessSimulation): ModuleCompileHints {
   const entryQuestion = queue.questions.find((question) => question.kind === "entry_scene")!;
   const endingQuestion = queue.questions.find((question) => question.kind === "ending_rule")!;
   return {
-    schemaVersion: "1.1.0",
+    schemaVersion: MODULE_COMPILE_HINTS_SCHEMA_VERSION,
     moduleId: queue.moduleId,
     documentHash: queue.documentHash,
     sourceGraphIdentity: queue.sourceGraphIdentity,
     resolutions: [
+      // A fixture reviewer explicitly accepts every structural atom as the
+      // visible shell. This keeps legacy mechanics tests closed without
+      // reinstating the prohibited whole-body fallback in production.
+      ...queue.questions.filter((question) => question.kind === "clue_fact_facets").map((question) => resolution(question, {
+        shell: (question.allowedClueFactAtoms ?? []).map((atom) => ({ atomId: atom.id, quote: atom.quote })),
+        findings: [],
+        sourceOnlyAtomIds: [],
+      })),
       ...queue.questions.filter((question) => question.kind === "scene_role").map((question) => resolution(question, { role: "playable_scene" })),
       resolution(entryQuestion, { sceneCandidateId: entry.id }),
       resolution(topology(entry.id), { connections: [{ toSceneCandidateId: archive.id, connectionId: "connection_entry_archive" }, { toSceneCandidateId: exit.id, connectionId: "connection_entry_exit" }] }),
@@ -89,8 +98,37 @@ function hints(value: PreparedCompilerProcessSimulation): ModuleCompileHints {
   };
 }
 
+function hintsWithGroundedProposalAudit(value: PreparedCompilerProcessSimulation): ModuleCompileHints {
+  const audited = structuredClone(hints(value));
+  const question = value.queue.questions.find((candidate) => candidate.kind === "scene_role")!;
+  const resolution = audited.resolutions.find((candidate) => candidate.questionId === question.id)!;
+  const statement = value.graph.statements.find((candidate) => candidate.id === question.sourceStatementIds[0]!)!;
+  resolution.reviewerKind = "approved_policy";
+  resolution.policyId = "artifact-grounded-policy-v1";
+  resolution.audit = {
+    kind: "compiler_hint_proposal",
+    schemaVersion: "1.1.0",
+    proposalId: "artifact-grounded-proposal-1",
+    policyId: "artifact-grounded-policy-v1",
+    citations: [{ claimKey: "scene_role", statementId: statement.id, quote: statement.text }],
+    producer: {
+      providerFingerprint: "provider:artifact-test-v1",
+      modelFingerprint: "model:artifact-test-v1",
+      requestHash: "a".repeat(64),
+      responseHash: "b".repeat(64),
+    },
+  };
+  return audited;
+}
+
 function artifactPrepared(value = prepared()): PreparedCompilerArtifactPayload {
-  return { identity: structuredClone(value.identity), graph: structuredClone(value.graph), draft: structuredClone(value.draft), preparedQueue: structuredClone(value.queue) };
+  return {
+    identity: structuredClone(value.identity),
+    graph: structuredClone(value.graph),
+    draft: structuredClone(value.draft),
+    preparedQueue: structuredClone(value.queue),
+    sourceFactDispositionReport: buildPreparedSourceFactDispositionReport(value.graph, value.draft, value.queue),
+  };
 }
 
 function artifactResolved(): ResolvedCompilerArtifactPayload {
@@ -140,6 +178,32 @@ describe("compiler artifact persistence", () => {
     expect(loaded.payload.mechanicsIR.mechanicsHash).toBe(resolved.mechanicsIR.mechanicsHash);
   });
 
+  it("preserves verified grounded-proposal audit provenance through resolve and artifact restoration", () => {
+    const source = prepared();
+    const resolved = resolvePreparedCompilerArtifact(artifactPrepared(source), hintsWithGroundedProposalAudit(source));
+    const envelope = createResolvedCompilerArtifact(resolved);
+    const restored = restoreCompilerArtifact(envelope);
+    if (restored.status === "refused") throw new Error(restored.message);
+    if (restored.stage !== "resolved") throw new Error("expected resolved artifact");
+    const sourceQuestion = source.queue.questions.find((candidate) => candidate.kind === "scene_role")!;
+    const sourceStatement = source.graph.statements.find((candidate) => candidate.id === sourceQuestion.sourceStatementIds[0]!)!;
+    const audit = restored.payload.hints.resolutions.find((resolution) => resolution.audit)?.audit;
+    expect(audit).toEqual({
+      kind: "compiler_hint_proposal",
+      schemaVersion: "1.1.0",
+      proposalId: "artifact-grounded-proposal-1",
+      policyId: "artifact-grounded-policy-v1",
+      citations: [{ claimKey: "scene_role", statementId: sourceStatement.id, quote: sourceStatement.text }],
+      producer: {
+        providerFingerprint: "provider:artifact-test-v1",
+        modelFingerprint: "model:artifact-test-v1",
+        requestHash: "a".repeat(64),
+        responseHash: "b".repeat(64),
+      },
+    });
+    expect(restored.payload.resolvedQueue.questions.find((question) => question.resolution?.audit)?.resolution?.audit).toEqual(audit);
+  });
+
   it("rejects rehashed changes to source, scope, graph, queue, review, accepted, and mechanics components", () => {
     const envelope = createResolvedCompilerArtifact(artifactResolved());
     const changes: Array<[string, (copy: any) => void]> = [
@@ -161,10 +225,17 @@ describe("compiler artifact persistence", () => {
     const preparedEnvelope = createPreparedCompilerArtifact(artifactPrepared());
     expectRefusal(restoreCompilerArtifact(reseal(preparedEnvelope, (copy) => { copy.schemaVersion = "unknown"; })), "ARTIFACT_SCHEMA_MISMATCH");
     expectRefusal(restoreCompilerArtifact(reseal(preparedEnvelope, (copy) => { copy.componentVersions.preparedQueue = "unknown"; })), "ARTIFACT_COMPONENT_VERSION_MISMATCH");
+    // Queue 1.7 carries canonical prose-anchor statement identity; a persisted
+    // 1.6 artifact cannot be replayed under that changed serialization contract.
+    expectRefusal(restoreCompilerArtifact(reseal(preparedEnvelope, (copy) => { copy.componentVersions.preparedQueue = "1.6.0"; })), "ARTIFACT_COMPONENT_VERSION_MISMATCH");
+    expectRefusal(restoreCompilerArtifact(reseal(preparedEnvelope, (copy) => { copy.componentVersions.sourceFactGraph = "1.0.0"; })), "ARTIFACT_COMPONENT_VERSION_MISMATCH");
     const queueSubstitution = structuredClone(preparedEnvelope);
     queueSubstitution.artifactHash = queueSubstitution.payload.identity.preparedQueueHash;
     expectRefusal(restoreCompilerArtifact(queueSubstitution), "ARTIFACT_HASH_MISMATCH");
     const resolvedEnvelope = createResolvedCompilerArtifact(artifactResolved());
+    // Reachability 1.1 records terminal-loss witnesses and defines its count
+    // over control classes, so a rehashed 1.0 payload remains incompatible.
+    expectRefusal(restoreCompilerArtifact(reseal(resolvedEnvelope, (copy) => { copy.componentVersions.reachabilityReport = "1.0.0"; })), "ARTIFACT_COMPONENT_VERSION_MISMATCH");
     const mechanicsSubstitution = structuredClone(resolvedEnvelope);
     mechanicsSubstitution.artifactHash = (mechanicsSubstitution.payload as ResolvedCompilerArtifactPayload).identity.mechanicsHash;
     expectRefusal(restoreCompilerArtifact(mechanicsSubstitution), "ARTIFACT_HASH_MISMATCH");

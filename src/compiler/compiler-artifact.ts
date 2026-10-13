@@ -8,17 +8,24 @@ import {
   type CompilerQuestionQueue,
   type ModuleCompileHints,
 } from "./compiler-question-queue";
-import { resolveDraftModule, type ResolvedDraftModule } from "./compile-hint-resolution";
+import { resolveDraftModule, type ResolvedClueFactFacetBinding, type ResolvedDraftModule, type ResolvedItemBinding, type ResolvedProseDialogueClue, type ResolvedProseNpcBinding, type ResolvedRewardBinding, type ResolvedSourceFactMechanicBinding } from "./compile-hint-resolution";
 import { DRAFT_MODULE_STRUCTURE_SCHEMA_VERSION, compileDeterministicTemplates, type DraftModuleStructure } from "./deterministic-template-compiler";
 import { MECHANICS_IR_SCHEMA_VERSION, MechanicsCompilationError, sourceFactGraphIdentity, validateMechanicsIR, type MechanicsIR } from "./mechanics-ir";
 import { MechanicsReachabilityError, type MechanicsReachabilityReport } from "./mechanics-reachability";
 import { validateMechanicsAnalysisInput, type MechanicsAnalysisInput } from "./mechanics-execution";
 import { SOURCE_FACT_GRAPH_SCHEMA_VERSION, validateSourceFactGraph, type FactInterpretationCandidate, type SourceFactGraph } from "./source-fact-graph";
+import {
+  SOURCE_FACT_DISPOSITION_REPORT_SCHEMA_VERSION,
+  buildPreparedSourceFactDispositionReport,
+  buildResolvedSourceFactDispositionReport,
+  validateSourceFactDispositionReport,
+  type SourceFactDispositionReport,
+} from "./source-fact-disposition";
 import { DOCUMENT_IR_SCHEMA_VERSION, sha256, validateDocumentIR } from "../ingest/document-ir";
 
 export const COMPILER_ARTIFACT_SCHEMA_VERSION = "1.0.0";
 export const COMPILER_ARTIFACT_ANALYSIS_INPUT_SCHEMA_VERSION = "1.0.0";
-export const COMPILER_ARTIFACT_REACHABILITY_REPORT_SCHEMA_VERSION = "1.0.0";
+export const COMPILER_ARTIFACT_REACHABILITY_REPORT_SCHEMA_VERSION = "1.1.0";
 
 export interface CompilerArtifactComponentVersions {
   documentIR: typeof DOCUMENT_IR_SCHEMA_VERSION;
@@ -29,6 +36,7 @@ export interface CompilerArtifactComponentVersions {
   mechanicsIR: typeof MECHANICS_IR_SCHEMA_VERSION;
   analysisInput: typeof COMPILER_ARTIFACT_ANALYSIS_INPUT_SCHEMA_VERSION;
   reachabilityReport: typeof COMPILER_ARTIFACT_REACHABILITY_REPORT_SCHEMA_VERSION;
+  sourceFactDispositionReport: typeof SOURCE_FACT_DISPOSITION_REPORT_SCHEMA_VERSION;
 }
 
 export interface PreparedCompilerArtifactIdentity {
@@ -48,6 +56,8 @@ export interface PreparedCompilerArtifactPayload {
   graph: SourceFactGraph;
   draft: DraftModuleStructure;
   preparedQueue: CompilerQuestionQueue;
+  /** Prepared-stage canonical source whole-statement accounting. */
+  sourceFactDispositionReport: SourceFactDispositionReport;
 }
 
 export interface ResolvedCompilerArtifactPayload extends PreparedCompilerArtifactPayload {
@@ -56,10 +66,18 @@ export interface ResolvedCompilerArtifactPayload extends PreparedCompilerArtifac
   resolvedQueue: CompilerQuestionQueue;
   acceptedInterpretations: FactInterpretationCandidate[];
   substitutedEnginePolicyInterpretationIds: string[];
+  proseNpcBindings: ResolvedProseNpcBinding[];
+  proseDialogueClues: ResolvedProseDialogueClue[];
+  itemBindings: ResolvedItemBinding[];
+  rewardBindings: ResolvedRewardBinding[];
+  sourceFactMechanicBindings: ResolvedSourceFactMechanicBinding[];
+  clueFactFacetBindings: ResolvedClueFactFacetBinding[];
   mechanicsIR: MechanicsIR;
   analysisInput: MechanicsAnalysisInput;
   reachabilityReport: MechanicsReachabilityReport;
   readiness: ResolvedDraftModule["readiness"];
+  /** Recomputed from the effective resolved queue and accepted runtime bindings. */
+  resolvedSourceFactDispositionReport: SourceFactDispositionReport;
 }
 
 export interface CompilerArtifactEnvelope {
@@ -80,6 +98,7 @@ export type CompilerArtifactRefusalCode =
   | "PREPARED_IDENTITY_MISMATCH"
   | "PREPARED_DRAFT_MISMATCH"
   | "PREPARED_QUEUE_MISMATCH"
+  | "PREPARED_DISPOSITION_REPORT_MISMATCH"
   | "RESOLVED_HINTS_INVALID"
   | "RESOLVED_NOT_CLOSED"
   | "RESOLVED_IDENTITY_MISMATCH"
@@ -97,6 +116,15 @@ export type RestoredCompilerArtifact =
   | { status: "restored"; stage: "prepared"; artifactHash: string; payload: PreparedCompilerArtifactPayload }
   | { status: "restored"; stage: "resolved"; artifactHash: string; payload: ResolvedCompilerArtifactPayload };
 
+/**
+ * Bounded envelope/hash check for a validator-child result.  Unlike restore it
+ * deliberately does not regenerate a graph, draft, or queue in the caller's
+ * process; the disposable validator already performed that expensive work.
+ */
+export type VerifiedPreparedCompilerArtifact =
+  | { status: "verified"; artifactHash: string; identity: PreparedCompilerArtifactIdentity }
+  | CompilerArtifactRefusal;
+
 export class CompilerArtifactDataError extends Error {
   constructor(readonly code: CompilerArtifactRefusalCode, message: string) {
     super(message);
@@ -113,6 +141,7 @@ const COMPONENT_VERSIONS: CompilerArtifactComponentVersions = {
   mechanicsIR: MECHANICS_IR_SCHEMA_VERSION,
   analysisInput: COMPILER_ARTIFACT_ANALYSIS_INPUT_SCHEMA_VERSION,
   reachabilityReport: COMPILER_ARTIFACT_REACHABILITY_REPORT_SCHEMA_VERSION,
+  sourceFactDispositionReport: SOURCE_FACT_DISPOSITION_REPORT_SCHEMA_VERSION,
 };
 
 function canonicalJson(value: unknown): string {
@@ -198,14 +227,32 @@ function decodeEnvelope(value: unknown): CompilerArtifactEnvelope {
   assertKeys(componentVersions, Object.keys(COMPONENT_VERSIONS), "componentVersions");
   if (!sameSnapshot(componentVersions, COMPONENT_VERSIONS)) throw new CompilerArtifactDataError("ARTIFACT_COMPONENT_VERSION_MISMATCH", "unsupported artifact component versions");
   const payload = assertRecord(envelope.payload, "payload");
-  const preparedKeys = ["identity", "graph", "draft", "preparedQueue"];
-  const resolvedKeys = [...preparedKeys, "hints", "resolvedQueue", "acceptedInterpretations", "substitutedEnginePolicyInterpretationIds", "mechanicsIR", "analysisInput", "reachabilityReport", "readiness"];
+  const preparedKeys = ["identity", "graph", "draft", "preparedQueue", "sourceFactDispositionReport"];
+  const resolvedKeys = [...preparedKeys, "hints", "resolvedQueue", "acceptedInterpretations", "substitutedEnginePolicyInterpretationIds", "proseNpcBindings", "proseDialogueClues", "itemBindings", "rewardBindings", "sourceFactMechanicBindings", "clueFactFacetBindings", "mechanicsIR", "analysisInput", "reachabilityReport", "readiness", "resolvedSourceFactDispositionReport"];
   assertKeys(payload, envelope.stage === "prepared" ? preparedKeys : resolvedKeys, "payload");
   for (const key of preparedKeys) if (!(key in payload)) throw new CompilerArtifactDataError("ARTIFACT_PARSE_FAILED", `artifact payload is missing ${key}`);
   if (envelope.stage === "resolved") for (const key of resolvedKeys) if (!(key in payload)) throw new CompilerArtifactDataError("ARTIFACT_PARSE_FAILED", `resolved artifact payload is missing ${key}`);
   const decoded = envelope as unknown as CompilerArtifactEnvelope;
   if (compilerArtifactIdentity(decoded) !== decoded.artifactHash) throw new CompilerArtifactDataError("ARTIFACT_HASH_MISMATCH", "artifactHash does not match canonical envelope");
   return decoded;
+}
+
+export function verifyPreparedCompilerArtifactEnvelope(value: unknown): VerifiedPreparedCompilerArtifact {
+  try {
+    const envelope = decodeEnvelope(value);
+    if (envelope.stage !== "prepared") return refusal("parse", "ARTIFACT_SCHEMA_MISMATCH", "prepared artifact required");
+    const identity = envelope.payload.identity;
+    if (!identity || typeof identity.moduleId !== "string" || !identity.moduleId.trim()
+      || (typeof identity.documentHash !== "string" && identity.documentHash !== null)
+      || typeof identity.sourceGraphIdentity !== "string" || !identity.sourceGraphIdentity
+      || typeof identity.preparedQueueHash !== "string" || !/^[a-f0-9]{64}$/.test(identity.preparedQueueHash)) {
+      return refusal("parse", "ARTIFACT_IDENTITY_SUBSTITUTION", "prepared artifact identity is malformed");
+    }
+    return { status: "verified", artifactHash: envelope.artifactHash, identity: jsonClone(identity) };
+  } catch (error) {
+    if (expectedDataError(error)) return refusal("parse", error instanceof CompilerArtifactDataError ? error.code : "ARTIFACT_PARSE_FAILED", error);
+    throw error;
+  }
 }
 
 function validatePreparedIdentity(payload: PreparedCompilerArtifactPayload): void {
@@ -224,7 +271,16 @@ function regeneratePrepared(payload: PreparedCompilerArtifactPayload): PreparedC
   if (!sameSnapshot(draft, payload.draft)) throw new CompilerArtifactDataError("PREPARED_DRAFT_MISMATCH", "persisted draft differs from deterministic regeneration");
   const preparedQueue = buildCompilerQuestionQueue(payload.graph, draft);
   if (!sameSnapshot(preparedQueue, payload.preparedQueue)) throw new CompilerArtifactDataError("PREPARED_QUEUE_MISMATCH", "persisted prepared queue differs from deterministic regeneration");
-  return { identity: jsonClone(payload.identity), graph: jsonClone(payload.graph), draft, preparedQueue };
+  const sourceFactDispositionReport = buildPreparedSourceFactDispositionReport(payload.graph, draft, preparedQueue);
+  try {
+    validateSourceFactDispositionReport(payload.graph, payload.sourceFactDispositionReport);
+  } catch (error) {
+    throw new CompilerArtifactDataError("PREPARED_DISPOSITION_REPORT_MISMATCH", error instanceof Error ? error.message : "persisted prepared source disposition report is invalid");
+  }
+  if (!sameSnapshot(sourceFactDispositionReport, payload.sourceFactDispositionReport)) {
+    throw new CompilerArtifactDataError("PREPARED_DISPOSITION_REPORT_MISMATCH", "persisted prepared source disposition report differs from deterministic regeneration");
+  }
+  return { identity: jsonClone(payload.identity), graph: jsonClone(payload.graph), draft, preparedQueue, sourceFactDispositionReport };
 }
 
 function requireClosed(resolved: ResolvedDraftModule): asserts resolved is ResolvedDraftModule & Required<Pick<ResolvedDraftModule, "mechanicsIR" | "analysisInput" | "reachabilityReport">> {
@@ -235,7 +291,7 @@ function requireClosed(resolved: ResolvedDraftModule): asserts resolved is Resol
 
 function resolvePrepared(prepared: PreparedCompilerArtifactPayload, hints: ModuleCompileHints): ResolvedCompilerArtifactPayload {
   try {
-    validateModuleCompileHints(prepared.preparedQueue, hints);
+    validateModuleCompileHints(prepared.preparedQueue, hints, prepared.graph);
   } catch (error) {
     if (expectedDataError(error)) throw new CompilerArtifactDataError("RESOLVED_HINTS_INVALID", error instanceof Error ? error.message : String(error));
     throw error;
@@ -249,6 +305,12 @@ function resolvePrepared(prepared: PreparedCompilerArtifactPayload, hints: Modul
     resolvedQueueHash: resolved.resolvedQueue.queueHash,
     mechanicsHash: resolved.mechanicsIR.mechanicsHash,
   };
+  const resolvedSourceFactDispositionReport = buildResolvedSourceFactDispositionReport(prepared.graph, prepared.draft, resolved.resolvedQueue, resolved.acceptedInterpretations, {
+    proseNpcBindings: resolved.proseNpcBindings,
+    itemBindings: resolved.itemBindings,
+    rewardBindings: resolved.rewardBindings,
+    sourceFactMechanicBindings: resolved.sourceFactMechanicBindings,
+  });
   return {
     ...prepared,
     identity,
@@ -256,10 +318,17 @@ function resolvePrepared(prepared: PreparedCompilerArtifactPayload, hints: Modul
     resolvedQueue: resolved.resolvedQueue,
     acceptedInterpretations: resolved.acceptedInterpretations,
     substitutedEnginePolicyInterpretationIds: resolved.substitutedEnginePolicyInterpretationIds,
+    proseNpcBindings: resolved.proseNpcBindings,
+    proseDialogueClues: resolved.proseDialogueClues,
+    itemBindings: resolved.itemBindings,
+    rewardBindings: resolved.rewardBindings,
+    sourceFactMechanicBindings: resolved.sourceFactMechanicBindings,
+    clueFactFacetBindings: resolved.clueFactFacetBindings,
     mechanicsIR: resolved.mechanicsIR,
     analysisInput: resolved.analysisInput,
     reachabilityReport: resolved.reachabilityReport,
     readiness: resolved.readiness,
+    resolvedSourceFactDispositionReport,
   };
 }
 
@@ -271,10 +340,17 @@ function assertResolvedMatches(payload: ResolvedCompilerArtifactPayload, regener
     ["resolved queue", payload.resolvedQueue, regenerated.resolvedQueue],
     ["accepted interpretations", payload.acceptedInterpretations, regenerated.acceptedInterpretations],
     ["policy substitutions", payload.substitutedEnginePolicyInterpretationIds, regenerated.substitutedEnginePolicyInterpretationIds],
+    ["prose NPC bindings", payload.proseNpcBindings, regenerated.proseNpcBindings],
+    ["prose dialogue clues", payload.proseDialogueClues, regenerated.proseDialogueClues],
+    ["item bindings", payload.itemBindings, regenerated.itemBindings],
+    ["reward bindings", payload.rewardBindings, regenerated.rewardBindings],
+    ["source fact mechanic bindings", payload.sourceFactMechanicBindings, regenerated.sourceFactMechanicBindings],
+    ["clue fact facet bindings", payload.clueFactFacetBindings, regenerated.clueFactFacetBindings],
     ["MechanicsIR", payload.mechanicsIR, regenerated.mechanicsIR],
     ["analysis input", payload.analysisInput, regenerated.analysisInput],
     ["reachability report", payload.reachabilityReport, regenerated.reachabilityReport],
     ["readiness", payload.readiness, regenerated.readiness],
+    ["resolved source fact disposition report", payload.resolvedSourceFactDispositionReport, regenerated.resolvedSourceFactDispositionReport],
   ];
   for (const [label, actual, expected] of snapshots) if (!sameSnapshot(actual, expected)) throw new CompilerArtifactDataError("RESOLVED_SNAPSHOT_MISMATCH", `persisted ${label} differs from complete re-resolution`);
 }

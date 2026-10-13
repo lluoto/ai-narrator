@@ -4,6 +4,10 @@
 
 import type { ModuleData, Scene, ModuleState, NPCInstanceState, Clue, NarrativeEntity } from "../module/types";
 
+function cloneValue<T>(value: T): T {
+  return structuredClone(value);
+}
+
 export class WorldState {
   private module: ModuleData;
   private state: ModuleState;
@@ -11,9 +15,9 @@ export class WorldState {
   private clueFailCounts = new Map<string, number>();
 
   constructor(module: ModuleData) {
-    this.module = module;
+    this.module = cloneValue(module);
     this.state = {
-      currentSceneId: module.scenes[0]?.id ?? "",
+      currentSceneId: this.module.scenes[0]?.id ?? "",
       discoveredClues: new Set<string>(),
       triggeredEvents: new Set<string>(),
       npcStates: new Map<string, NPCInstanceState>(),
@@ -21,7 +25,7 @@ export class WorldState {
       currentRound: 0,
       // 剧情状态变量：以各场景声明（Scene.stateVars）为初始值
       sceneStateVars: new Map<string, Record<string, boolean | string>>(
-        module.scenes
+        this.module.scenes
           .filter(s => s.stateVars && Object.keys(s.stateVars).length > 0)
           .map(s => [s.id, { ...(s.stateVars as Record<string, boolean | string>) }]),
       ),
@@ -30,7 +34,7 @@ export class WorldState {
     };
 
     // 初始化所有 NPC 状态
-    for (const npc of module.npcs) {
+    for (const npc of this.module.npcs) {
       this.state.npcStates.set(npc.id, {
         locationSceneId: npc.sceneId,
         mood: "neutral",
@@ -44,7 +48,8 @@ export class WorldState {
   }
 
   get currentScene(): Scene | undefined {
-    return this.module.scenes.find((s) => s.id === this.state.currentSceneId);
+    const scene = this.module.scenes.find((s) => s.id === this.state.currentSceneId);
+    return scene ? cloneValue(scene) : undefined;
   }
 
   get currentSceneId(): string {
@@ -56,15 +61,17 @@ export class WorldState {
   }
 
   get allNpcs() {
-    return this.module.npcs;
+    return cloneValue(this.module.npcs);
   }
 
   getNpcState(npcId: string): NPCInstanceState | undefined {
-    return this.state.npcStates.get(npcId);
+    const state = this.state.npcStates.get(npcId);
+    return state ? cloneValue(state) : undefined;
   }
 
   getNpc(npcId: string) {
-    return this.module.npcs.find((n) => n.id === npcId);
+    const npc = this.module.npcs.find((n) => n.id === npcId);
+    return npc ? cloneValue(npc) : undefined;
   }
 
   /** 获取当前场景中可见的 NPC */
@@ -73,7 +80,7 @@ export class WorldState {
     for (const [id, s] of this.state.npcStates) {
       if (s.locationSceneId === this.state.currentSceneId && s.isAlive && s.knownByPlayers) {
         const npc = this.getNpc(id);
-        if (npc) results.push({ npc, state: s });
+        if (npc) results.push({ npc, state: cloneValue(s) });
       }
     }
     return results;
@@ -83,10 +90,10 @@ export class WorldState {
   getSceneClues(): Clue[] {
     const scene = this.currentScene;
     if (!scene) return [];
-    return scene.clues.map((c) => ({
+    return cloneValue(scene.clues.map((c) => ({
       ...c,
       found: this.state.discoveredClues.has(c.id),
-    }));
+    })));
   }
 
   /** 获取当前场景中未发现的线索 */
@@ -118,7 +125,7 @@ export class WorldState {
 
   /** 读取某场景的剧情状态变量（含 Scene.stateVars 初始值 + 运行时修改） */
   getStateVars(sceneId: string): Record<string, boolean | string> {
-    return { ...(this.state.sceneStateVars.get(sceneId) ?? {}) };
+    return cloneValue(this.state.sceneStateVars.get(sceneId) ?? {});
   }
 
   /** 读取单个剧情状态变量 */
@@ -140,7 +147,7 @@ export class WorldState {
 
   /** 全部叙事实体定义 */
   get narrativeEntities(): NarrativeEntity[] {
-    return this.module.narrative?.entities ?? [];
+    return cloneValue(this.module.narrative?.entities ?? []);
   }
 
   /** 标记某实体已被台词提起 */
@@ -244,7 +251,8 @@ export class WorldState {
 
   /** 获取场景建议的技能检定 */
   getSkillCheckHints(): { skill: string; difficulty: string; purpose: string }[] {
-    return this.currentScene?.skillChecks ?? [];
+    const scene = this.module.scenes.find((s) => s.id === this.state.currentSceneId);
+    return cloneValue(scene?.skillChecks ?? []);
   }
 
   /** 推进一个回合 */
@@ -312,6 +320,6 @@ export class WorldState {
 
   /** 导出完整状态快照 */
   getSnapshot(): ModuleState {
-    return this.state;
+    return cloneValue(this.state);
   }
 }

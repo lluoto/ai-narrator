@@ -17,25 +17,24 @@ import { decideClueMatch, type ClueMatchCandidate } from "../investigation/clue-
 import { resolveSceneTarget, type SceneRow } from "../play/scene-resolve";
 import { NARRATIVE_VOCABULARY_REGISTRY } from "../investigation/narrative-vocabulary-registry";
 
-async function loadedSession(id: string): Promise<GameSession & Record<string, any>> {
+async function loadedSession(id: string): Promise<GameSession> {
   process.env.LLM_API_KEY = "";
   process.env.OPENAI_API_KEY = "";
   const session = new GameSession(id, "cosmic-horror", {
     apiKey: "sk-placeholder", baseUrl: "http://localhost:9999", model: "mock", maxTokens: 1024, temperature: 0.7,
-  }, undefined, "调查员") as GameSession & Record<string, any>;
+  }, "investigator", "调查员");
   await session.act("加载模组 普瑞米尔的谷仓");
   return session;
 }
 
 /** 从真实会话取一个场景里带 matchTexts 的线索候选集——与 GameSession.matchCurrentSceneClue 同一份筛选口径。 */
-function clueCandidatesForScene(session: GameSession & Record<string, any>, sceneName: string): ClueMatchCandidate[] {
-  const investigation: any = session.investigation;
-  const ids: string[] = investigation.getSceneClues(sceneName);
-  const clueTypes: Map<string, { matchTexts?: string[] }> = investigation.clueTypes;
+function clueCandidatesForScene(session: GameSession, sceneName: string): ClueMatchCandidate[] {
+  const investigation = session.investigation;
+  const ids = investigation.getSceneClues(sceneName);
   return ids
-    .map((id) => ({ id, info: clueTypes.get(id) }))
-    .filter((c): c is { id: string; info: { matchTexts: string[] } } => (c.info?.matchTexts?.length ?? 0) > 0)
-    .map((c) => ({ id: c.id, texts: c.info.matchTexts }));
+    .map((id) => ({ id, info: investigation.getClueMatchInfo(id) }))
+    .filter((c): c is { id: string; info: Readonly<{ matchTexts: readonly string[]; displayName: string }> } => c.info !== null && c.info.matchTexts.length > 0)
+    .map((c) => ({ id: c.id, texts: [...c.info.matchTexts] }));
 }
 
 describe("**主判据**：登记表每一条叙事用词都能命中它登记的目标", () => {
@@ -55,10 +54,11 @@ describe("**主判据**：登记表每一条叙事用词都能命中它登记的
       it(`${label}（resolveSceneTarget）`, async () => {
         const session = await loadedSession(`vocab-scene-${entry.phrase}-${Math.random()}`);
         const rows: SceneRow[] = session.world.listScenes().map((r: any) => ({ id: r.id, name: r.name }));
+        const statics = session.exportOrdinarySessionSnapshot().state;
         const hit = resolveSceneTarget({
           said: entry.phrase,
-          displayNames: (session as any).sceneDisplayNames,
-          aliases: (session as any).sceneAliases,
+          displayNames: statics.sceneDisplayNames,
+          aliases: statics.sceneAliases,
           rows,
         });
         expect(hit.sceneId).toBe(target.sceneId);
@@ -81,7 +81,7 @@ describe("登记表本身诚实——每条都必须给出理由，不能只列�
       if (entry.target.kind === "clue") {
         expect(session.investigation.hasClueType(entry.target.clueId)).toBe(true);
       } else {
-        expect((session as any).sceneDisplayNames[entry.target.sceneId]).toBeDefined();
+        expect(session.exportOrdinarySessionSnapshot().state.sceneDisplayNames[entry.target.sceneId]).toBeDefined();
       }
     }
   });

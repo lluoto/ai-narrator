@@ -60,9 +60,15 @@ interface NPCFaction {
 export type NPCMood = "neutral" | "friendly" | "angry" | "fearful" | "suspicious" | "excited" | "sad" | "calm";
 
 /** 运行时可枚举的同一份取值。与上面的联合类型手工同步——加取值时两处一起改。 */
-export const NPC_MOODS: readonly NPCMood[] = [
+export const NPC_MOODS = [
   "neutral", "friendly", "angry", "fearful", "suspicious", "excited", "sad", "calm",
-];
+] as const satisfies readonly NPCMood[];
+
+export const NPC_RULESETS = ["cosmic-horror", "dnd5e", "grail"] as const;
+export type NPCRuleset = typeof NPC_RULESETS[number];
+
+export const NPC_MEMORY_TYPES = ["observation", "dialogue", "event", "decision"] as const;
+export type NPCMemoryType = typeof NPC_MEMORY_TYPES[number];
 
 /**
  * 把来路不明的值收成 NPCMood，不合法就返回 undefined。
@@ -95,7 +101,7 @@ export interface NPCPersonality {
   /** 对其他角色的态度 */
   attitudes?: Record<string, string>; // character_name → attitude_description
   /** 适用的规则集（留空表示适用于所有规则集） */
-  ruleset?: "cosmic-horror" | "dnd5e" | "grail";
+  ruleset?: NPCRuleset;
   /** 结构化性格特质（缺省时使用 DEFAULT_NPC_TRAITS） */
   traits?: NPCTraits;
   /** 所属阵营 */
@@ -110,7 +116,7 @@ export interface NPCPersonality {
 
 export interface MemoryEntry {
   timestamp: number;
-  type: "observation" | "dialogue" | "event" | "decision";
+  type: NPCMemoryType;
   content: string;
   importance: number; // 1-10, 越大越重要
 
@@ -135,7 +141,7 @@ export interface MemoryEntry {
 export interface AgentMessage {
   speaker: string; // NPC 名字 或 "KP" 或 "玩家"
   content: string;
-  type: "dialogue" | "narration" | "system" | "action";
+  type: AgentMessageType;
   /**
    * 内容是否为模组原文逐字输出（而非 LLM 生成）。
    *
@@ -152,7 +158,11 @@ export interface AgentMessage {
    * 取值与主流情感 TTS 的 style 参数基本对应，是未来语音层的音色输入。
    */
   mood?: NPCMood;
-  /** 谁可见（per-receiver 预留，全仓零消费方——见 visibility/discoverer 字段注释）。 */
+  /**
+   * 历史持久化 snapshot 的兼容字段，不是 live 路由策略。新的
+   * PlayerSession.push 对任何自有该字段 fail-closed；路由只看
+   * visibility/discoverer/targets。
+   */
   visible_to?: string[];
   /**
    * 入会话时间（epoch ms），由 PlayerSession.push 统一打上。
@@ -164,7 +174,8 @@ export interface AgentMessage {
    * PlayerSession.push 据此分发到不同玩家的 messageHistory。缺省视为
    * "public"（push() 的默认参数）。
    *
-   * ⚠ 这不是 visible_to：那是另一套预留但零消费方的机制（per-receiver 名单）。
+   * ⚠ 这不是 visible_to：后者只为 legacy snapshot parser/restore/export
+   * 兼容保留；新的 PlayerSession.push 会拒绝任何自有名单字段。
    * 这里复用的是 PlayerSession.push(message, visibility, discoverer, targets)
    * 已有的、GameSession.addMessage 已经在用的 vocabulary——不新开第三套。
    */
@@ -178,12 +189,15 @@ export interface AgentMessage {
  * AgentMessage（上面）需要它，而 player-session.ts 反过来 import
  * AgentMessage——放回 session 层会成环。
  */
-export type VisibilityRule =
-  | "public"              // 所有人可见（战斗结果、场景切换）
-  | "scene_restricted"    // 同场景可见（NPC 对话、环境变化）
-  | "discoverer_only"     // 仅发现者可见（**线索发现、秘密揭露**）
-  | "targeted"            // 仅指定玩家可见（私密 DM 旁白、个人 SAN 检定结果）
-  | "private";            // 仅当前玩家 + KP 可见
+export const VISIBILITY_RULES = [
+  "public", "scene_restricted", "discoverer_only", "targeted", "private",
+] as const;
+
+export type VisibilityRule = typeof VISIBILITY_RULES[number];
+
+/** Runtime source of truth for AgentMessage.type consumers and validators. */
+export const AGENT_MESSAGE_TYPES = ["dialogue", "narration", "system", "action"] as const;
+export type AgentMessageType = typeof AGENT_MESSAGE_TYPES[number];
 
 /**
  * 消息类型 — API 响应、CLI、模组宿主接口共用同一套取值。

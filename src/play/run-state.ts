@@ -15,6 +15,7 @@ import type { CoCGeneratedCharacter } from "../character/coc-character";
 import type { SanityEngine } from "../rules/coc-engine";
 import type { WorldModelIntegrator } from "../world/world-model-integrator";
 import type { WorldModelLoader } from "../world/world-model-loader";
+import { createGameTime, type GameTime } from "../rules/game-time";
 
 /**
  * 本局的两名调查员。
@@ -43,6 +44,12 @@ export interface Cast {
 export interface Cursor {
   /** 主循环轮次，上限见 runModuleInner */
   rounds: number;
+  /**
+   * 本局唯一的确定性时钟。
+   *
+   * 陷阱等机制只读它判断时段；主循环推进它，不能再从 stepCounter 推导第二份昼夜算法。
+   */
+  gameTime: GameTime;
   /**
    * 轮流让哪名调查员出手。
    *
@@ -139,6 +146,7 @@ export function standing<T extends { hp: number }>(pcs: T[]): T[] {
 export function newCursor(): Cursor {
   return {
     rounds: 0,
+    gameTime: createGameTime(),
     stepCounter: 0,
     triggeredTraps: new Set<string>(),
     visitCount: new Map<string, number>(),

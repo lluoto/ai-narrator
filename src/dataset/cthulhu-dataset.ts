@@ -362,27 +362,45 @@ export function queryLoreCandidates(
   request: LoreQueryRequest,
   options: DatasetLoadOptions = {},
 ): LoreClaimCandidate[] {
+  return selectLoreCandidates(manifest, request, loadCthulhuDataset(manifest, options));
+}
+
+/**
+ * Applies the exact public query contract to a previously verified dataset.
+ * Runtime callers may share immutable parsed data, but never bypass manifest,
+ * work-scope, corpus-scope, or transfer-policy checks while doing so.
+ */
+export function selectLoreCandidates(
+  manifest: CthulhuDatasetManifest,
+  request: LoreQueryRequest,
+  loaded: Pick<CthulhuDatasetLoadResult, "candidates">,
+): LoreClaimCandidate[] {
   if (request.allowedWorkIds.length === 0) throw new LoreScopeError("allowedWorkIds must not be empty");
   const manifestIds = new Set(manifest.works.map((work) => work.workId));
   for (const workId of request.allowedWorkIds) {
     if (!manifestIds.has(workId)) throw new LoreScopeError(`work is not in manifest: ${workId}`);
   }
-  if (request.allowedWorkIds.length > 1) {
-    if (request.transferPolicy !== "analogy_only") {
-      throw new LoreScopeError("cross-work query requires analogy_only transferPolicy");
-    }
-    const corpus = manifest.corpusScopes.find((scope) => scope.id === request.corpusScopeId);
-    if (!corpus) throw new LoreScopeError("cross-work query requires an explicit manifest corpusScopeId");
+  const corpus = request.corpusScopeId == null
+    ? undefined
+    : manifest.corpusScopes.find((scope) => scope.id === request.corpusScopeId);
+  if (request.corpusScopeId != null) {
+    if (!corpus) throw new LoreScopeError(`corpusScopeId is not in manifest: ${request.corpusScopeId}`);
     const corpusIds = new Set(corpus.allowedWorkIds);
     if (request.allowedWorkIds.some((workId) => !corpusIds.has(workId))) {
       throw new LoreScopeError(`corpus scope does not allow all requested works: ${corpus.id}`);
     }
   }
+  if (request.allowedWorkIds.length > 1) {
+    if (request.transferPolicy !== "analogy_only") {
+      throw new LoreScopeError("cross-work query requires analogy_only transferPolicy");
+    }
+    if (!corpus) throw new LoreScopeError("cross-work query requires an explicit manifest corpusScopeId");
+  }
   const allowed = new Set(request.allowedWorkIds);
   const names = request.entityNames?.map((name) => name.toLocaleLowerCase("en-US"));
   const claimTypes = request.claimTypes ? new Set(request.claimTypes) : undefined;
   const domainTypes = DOMAIN_TYPES[request.domain];
-  return loadCthulhuDataset(manifest, options).candidates
+  return loaded.candidates
     .filter((candidate) => allowed.has(candidate.workId))
     .filter((candidate) => domainTypes.has(candidate.type))
     .filter((candidate) => !claimTypes || claimTypes.has(candidate.type))

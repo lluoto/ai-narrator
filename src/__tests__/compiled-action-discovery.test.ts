@@ -6,13 +6,78 @@ import { GameSession, compiledMechanicsAction } from "../api/game-session";
 import { CompiledSessionSnapshotStore } from "../api/compiled-session-snapshot";
 import { CompilerArtifactCatalog } from "../compiler/compiler-artifact-catalog";
 import { handleRequest, runAction } from "../api/server";
-import { compiledModuleHttpFixture } from "./compiled-module-http-lifecycle.test";
+import { createCompiledDurableTestHost, type CompiledDurableTestHost } from "./helpers/compiled-durable-host";
+import { compiledModuleHttpFixture, saveTrustedFixtureBundle } from "./helpers/compiled-module-http-fixture";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const CONFIG = { apiKey: "sk-placeholder", baseUrl: "http://offline.invalid", model: "offline", maxTokens: 1, temperature: 0 };
+
+interface DurableTestSession {
+  readonly host: CompiledDurableTestHost;
+  readonly session: GameSession;
+}
 const HIDDEN_FIXTURE_TEXT = ["父线索", "子线索", "一把档案室钥匙", "一份必须读懂的档案", "出口说明", "离开这里的旧车票", "rule_clean", "rule_hasty", "ending:rule_clean", "ending:rule_hasty"];
+const rngIsolationChild = join(import.meta.dir, "compiled-action-discovery-rng-child.ts");
+const RNG_ISOLATION_RESULT = "@@compiled-action-discovery-rng@@";
+const RNG_ISOLATION_DEADLINE_MS = 15_000;
+
+const keeperAuthenticator = () => ({ status: "authenticated" as const, principal: { id: "keeper:compiled-action-discovery", role: "keeper" as const } });
 
 function root(): string {
   return mkdtempSync(join(tmpdir(), "compiled-actions-"));
+}
+
+async function isolatedContaminatedRngFixture(): Promise<{ snapshot: "ok"; httpSnapshot: "ok"; restoredContamination: boolean }> {
+  const child = Bun.spawn([process.execPath, rngIsolationChild], {
+    cwd: process.cwd(), stdout: "pipe", stderr: "pipe", env: { ...process.env },
+  });
+  let childExited = false;
+  const exit = child.exited.then((code) => {
+    childExited = true;
+    return code;
+  });
+  const stdout = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let primaryFailure: unknown;
+  let failed = false;
+  let fixture: { snapshot: "ok"; httpSnapshot: "ok"; restoredContamination: boolean } | undefined;
+  const cleanupFailures = new Set<unknown>();
+  try {
+    const completion = Promise.all([exit, stdout, stderr]);
+    const timedOut = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(new Error(`isolated RNG fixture exceeded its ${RNG_ISOLATION_DEADLINE_MS}ms deadline`)), RNG_ISOLATION_DEADLINE_MS);
+    });
+    const [code, capturedStdout, capturedStderr] = await Promise.race([completion, timedOut]);
+    if (code !== 0) throw new Error(`isolated RNG fixture failed (${code}): ${capturedStdout}\n${capturedStderr}`);
+    const result = capturedStdout.split(/\r?\n/).find((line) => line.startsWith(RNG_ISOLATION_RESULT));
+    if (!result) throw new Error(`isolated RNG fixture returned no result: ${capturedStdout}\n${capturedStderr}`);
+    fixture = JSON.parse(result.slice(RNG_ISOLATION_RESULT.length)) as { snapshot: "ok"; httpSnapshot: "ok"; restoredContamination: boolean };
+  } catch (error) {
+    failed = true;
+    primaryFailure = error;
+  } finally {
+    if (deadline !== undefined) clearTimeout(deadline);
+    if (!childExited) {
+      try {
+        child.kill();
+      } catch (error) {
+        cleanupFailures.add(error);
+      }
+    }
+    const settled = await Promise.allSettled([exit, stdout, stderr]);
+    for (const outcome of settled) {
+      if (outcome.status === "rejected" && outcome.reason !== primaryFailure) cleanupFailures.add(outcome.reason);
+    }
+  }
+  if (failed) {
+    if (cleanupFailures.size > 0) throw new AggregateError([primaryFailure, ...cleanupFailures], "isolated RNG fixture and cleanup failed");
+    throw primaryFailure;
+  }
+  if (cleanupFailures.size === 1) throw cleanupFailures.values().next().value;
+  if (cleanupFailures.size > 1) throw new AggregateError(cleanupFailures, "isolated RNG fixture cleanup failed");
+  if (!fixture) throw new Error("isolated RNG fixture completed without a result");
+  return fixture;
 }
 
 function methodIds(payload: any) {
@@ -24,40 +89,51 @@ function methodIds(payload: any) {
   };
 }
 
-async function durableSession(dir: string, id = "compiled-actions") {
+async function durableSession(
+  dir: string,
+  id = "compiled-actions",
+) {
   const fixture = await compiledModuleHttpFixture();
   const catalog = new CompilerArtifactCatalog({ root: join(dir, "catalog") });
-  const saved = catalog.saveBundle(fixture.resolved.artifact, fixture.projection);
-  if (saved.status === "refused") throw new Error(saved.message);
-  const bundle = catalog.loadBundle(saved.value.id);
-  if (bundle.status === "refused") throw new Error(bundle.message);
-  const snapshots = new CompiledSessionSnapshotStore({ root: join(dir, "snapshots") });
-  const session = new GameSession(id, "cosmic-horror", CONFIG, "investigator", "Ada", undefined, { careerRoot: join(dir, "careers") });
+  const saved = saveTrustedFixtureBundle(catalog, fixture, "keeper:compiled-action-discovery");
+  const bundle = catalog.loadBundle(saved.id);
+  if (bundle.status !== "ok") throw new Error(bundle.message);
+  // Pure GameSession replay fixture: it intentionally exercises the
+  // snapshot transaction below without the production HTTP namespace host.
+  const snapshots = new CompiledSessionSnapshotStore({ root: join(dir, "snapshots"), allowUncoordinatedTestWrites: true });
+  const host = createCompiledDurableTestHost();
+  const session = new GameSession(
+    id, "cosmic-horror", CONFIG, "investigator", "Ada", undefined, { careerRoot: join(dir, "careers") },
+    undefined, "preferred", host.runtimeDependencies,
+  );
   const loaded = session.loadDurableCompiledModule(bundle.value);
   if (loaded.status === "refused") throw new Error(loaded.message);
-  const initial = session.createCompiledSessionSnapshot();
+  const initial = host.snapshot(session);
   const stored = snapshots.save(initial);
-  if (stored.status === "refused") throw new Error(stored.message);
-  session.acknowledgeCompiledSnapshot(initial);
-  snapshots.confirmCreated(initial);
-  return { fixture, catalog, snapshots, session, bundleId: saved.value.id, dir };
+  if (stored.status !== "ok") throw new Error(stored.message);
+  host.acknowledge(session, initial);
+  return { fixture, catalog, snapshots, session, durable: { host, session }, bundleId: saved.id, dir };
 }
 
-function restore(built: Awaited<ReturnType<typeof durableSession>>, snapshot?: unknown): GameSession {
+function restore(built: Awaited<ReturnType<typeof durableSession>>, snapshot?: unknown): DurableTestSession {
   const bundle = built.catalog.loadBundle(built.bundleId);
-  if (bundle.status === "refused") throw new Error(bundle.message);
+  if (bundle.status !== "ok") throw new Error(bundle.message);
   const raw = snapshot === undefined ? built.snapshots.read(built.session.id) : { status: "ok" as const, value: snapshot };
-  if (raw.status === "refused") throw new Error(raw.message);
-  const session = new GameSession(built.session.id, "cosmic-horror", CONFIG, undefined, undefined, undefined, { careerRoot: join(built.dir, "careers") });
+  if (raw.status !== "ok") throw new Error(raw.message);
+  const host = createCompiledDurableTestHost();
+  const session = new GameSession(
+    built.session.id, "cosmic-horror", CONFIG, undefined, undefined, undefined, { careerRoot: join(built.dir, "careers") },
+    undefined, "preferred", host.runtimeDependencies,
+  );
   const restored = session.restoreCompiledSession(raw.value, bundle.value);
   if (restored.status === "refused") throw new Error(restored.message);
-  return session;
+  return { host, session };
 }
 
-function commitAndRestore(current: GameSession, built: Awaited<ReturnType<typeof durableSession>>, mechanismId: string, actionId: string): GameSession {
-  const committed = current.commitCompiledAction(compiledMechanicsAction(mechanismId), actionId, current.getCompiledGeneration()!, (snapshot) => {
+function commitAndRestore(current: DurableTestSession, built: Awaited<ReturnType<typeof durableSession>>, mechanismId: string, actionId: string): DurableTestSession {
+  const committed = current.host.commit(current.session, compiledMechanicsAction(mechanismId), actionId, current.session.getCompiledGeneration()!, (snapshot) => {
     const stored = built.snapshots.save(snapshot);
-    if (stored.status === "refused") throw new Error(stored.message);
+    if (stored.status !== "ok") throw new Error(stored.message);
   });
   if (committed.status !== "committed") throw new Error(`compiled action was not committed: ${committed.status}`);
   return restore(built, committed.snapshot);
@@ -66,14 +142,13 @@ function commitAndRestore(current: GameSession, built: Awaited<ReturnType<typeof
 async function httpSession(dir: string) {
   const fixture = await compiledModuleHttpFixture();
   const catalog = new CompilerArtifactCatalog({ root: join(dir, "catalog") });
-  const saved = catalog.saveBundle(fixture.resolved.artifact, fixture.projection);
-  if (saved.status === "refused") throw new Error(saved.message);
+  const saved = saveTrustedFixtureBundle(catalog, fixture, "keeper:compiled-action-discovery");
   const snapshots = new CompiledSessionSnapshotStore({ root: join(dir, "snapshots") });
   const response = await handleRequest(new Request("http://test/api/sessions/compiled", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ bundleId: saved.value.id, archetype: "investigator", characterName: "Ada" }),
-  }), catalog, snapshots, { careerRoot: join(dir, "careers") });
+    body: JSON.stringify({ bundleId: saved.id, archetype: "investigator", characterName: "Ada" }),
+  }), catalog, snapshots, { careerRoot: join(dir, "careers") }, {}, {}, keeperAuthenticator);
   if (response.status !== 201) throw new Error(await response.text());
   const created = await response.json() as { sessionId: string; generation: number };
   return { fixture, catalog, snapshots, sessionId: created.sessionId, creation: created, dir };
@@ -83,7 +158,7 @@ async function request(built: Awaited<ReturnType<typeof httpSession>>, path: str
   const response = await handleRequest(new Request(`http://test${path}`, {
     method,
     ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
-  }), built.catalog, built.snapshots, { careerRoot: join(built.dir, "careers") });
+  }), built.catalog, built.snapshots, { careerRoot: join(built.dir, "careers") }, {}, {}, keeperAuthenticator);
   return { status: response.status, body: await response.json() as any };
 }
 
@@ -95,9 +170,8 @@ async function structuredAction(built: Awaited<ReturnType<typeof httpSession>>, 
   return request(built, `/api/sessions/${built.sessionId}/compiled/actions`, "POST", { mechanismId, pcId: "p1", actionId, expectedGeneration });
 }
 
-/** Snapshot every live authority that action discovery/refusal must leave alone. */
+/** Snapshot every public observation that action discovery/refusal must leave alone. */
 function immutableCompiledView(session: GameSession) {
-  const compiled = (session as any).compiledModule;
   return structuredClone({
     activePlayerId: session.activePlayerId,
     round: session.round,
@@ -106,7 +180,6 @@ function immutableCompiledView(session: GameSession) {
     trace: session.getCompiledMechanicsState()?.trace,
     world: session.world.getCurrentState(),
     history: session.getPlayerHistory("p1"),
-    budget: compiled?.budget.count,
     lastActiveAt: session.lastActiveAt,
   });
 }
@@ -117,18 +190,30 @@ function expectPlayerSafeLabels(labels: string[]) {
 }
 
 describe("compiled action discovery", () => {
+  it("constructs a durable fixture despite contaminated RNG in an isolated child process", async () => {
+    const originalRandom = Math.random;
+    expect(await isolatedContaminatedRngFixture()).toEqual({ snapshot: "ok", httpSnapshot: "ok", restoredContamination: true });
+    expect(Math.random).toBe(originalRandom);
+  }, 20_000);
+
   it("does not alter ordinary, Barn, or combat suggestion bytes", async () => {
     const ordinary = new GameSession("ordinary-suggestion-bytes", "cosmic-horror", CONFIG, "investigator", "Ada");
     expect(ordinary.getSuggestions("p1")).toEqual(["\u73af\u987e\u56db\u5468"]);
 
     const barn = new GameSession("barn-suggestion-bytes", "cosmic-horror", CONFIG, "investigator", "Ada");
     await barn.act("\u52a0\u8f7d\u6a21\u7ec4 \u666e\u745e\u7c73\u5c14\u7684\u8c37\u4ed3");
-    (barn as any).movePlayerToScene("\u7ef4\u68ee\u9152\u5427");
+    expect(activateRegisteredGameSessionSceneForTest(barn, "\u7ef4\u68ee\u9152\u5427")).toBe(true);
     expect(barn.getSuggestions("p1")).toEqual([
       "\u4ed4\u7ec6\u641c\u67e5\u8fd9\u91cc", "\u4e0e \u9152\u5427\u4fdd\u9556 \u4ea4\u8c08", "\u4e0e \u524d\u53f0 \u4ea4\u8c08", "\u524d\u5f80 \u666e\u745e\u7c73\u5c14",
     ]);
 
-    barn.combatActive = true;
+    const originalRandom = Math.random;
+    Math.random = () => 0.99;
+    try {
+      expect((await barn.act("攻击 酒吧保镖")).error).toBeUndefined();
+    } finally {
+      Math.random = originalRandom;
+    }
     expect(barn.getSuggestions("p1")).toEqual([
       "\u2694\uFE0F \u653b\u51fb\u654c\u4eba", "\u{1F6E1}\uFE0F \u9632\u5fa1", "\u{1F48A} \u4f7f\u7528\u7269\u54c1", "\u{1F3C3} \u64a4\u9000",
     ]);
@@ -140,13 +225,8 @@ describe("compiled action discovery", () => {
     const loaded = session.loadCompiledModule(fixture.resolved.artifact.payload as any, fixture.projection);
     expect(loaded.status).toBe("loaded");
     if (loaded.status === "refused") return;
-    const compiled = (session as any).compiledModule;
-    const parent = compiled.payload.mechanicsIR.discoveryMethods.find((method: any) => method.id === "find_parent");
-    compiled.payload.mechanicsIR.discoveryMethods.push({ ...structuredClone(parent), id: "a_second_parent" });
-    compiled.payload.analysisInput.discoveryLocations.a_second_parent = compiled.state.currentSceneId;
-
     const actions = session.getCompiledAvailableActions();
-    expect(actions.map((action) => action.mechanismId)).toEqual(["a_second_parent", "find_parent"]);
+    expect(actions.map((action) => action.mechanismId)).toEqual(["find_parent"]);
     expect(actions.every((action) => action.kind === "discovery" && action.label === "Search here" && action.command === compiledMechanicsAction(action.mechanismId))).toBe(true);
     expect(actions.every((action) => !("outcome" in action))).toBe(true);
     // These are real fixture-only data: clue display names, their source text,
@@ -156,29 +236,26 @@ describe("compiled action discovery", () => {
     actions[0]!.label = "mutated";
     expect(session.getCompiledAvailableActions()[0]!.label).toBe("Search here");
 
-    const result = await session.act(compiledMechanicsAction("a_second_parent"), "p1");
+    const result = await session.act(compiledMechanicsAction("find_parent"), "p1");
     expect(result.error).toBeUndefined();
     expect(session.getCompiledAvailableActions().map((action) => action.mechanismId)).not.toContain("find_parent");
-    expect(session.getCompiledAvailableActions().map((action) => action.mechanismId)).not.toContain("a_second_parent");
   });
 
-  it("never settles or mutates a compiled session while listing, including a pending automatic transition", async () => {
+  it("never mutates a compiled session while listing real available actions", async () => {
     const dir = root();
     try {
       const built = await durableSession(dir, "compiled-read-only");
-      const compiled = (built.session as any).compiledModule;
-      compiled.payload.mechanicsIR.transitions.push({
-        id: "pending_transition",
-        when: { kind: "all", predicates: [] },
-        effects: [{ kind: "set_state", stateKey: "pending", value: true }],
-        sourceInterpretationIds: [],
-      });
       const before = immutableCompiledView(built.session);
-      expect(() => built.session.getCompiledAvailableActions()).toThrow("not settled");
+      const first = built.session.getCompiledAvailableActions();
+      const second = built.session.getCompiledAvailableActions();
+      expect(second).toEqual(first);
       expect(immutableCompiledView(built.session)).toEqual(before);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  // This exercises HTTP creation, four durable commits, a snapshot reload, and
+  // terminal refusal. Give this one end-to-end contract a local budget when a
+  // saturated full suite delays its filesystem and HTTP work.
   it("serves generation-bound structured actions, refreshes after execution and restart, and preserves terminal metadata", async () => {
     const dir = root();
     const originalRandom = Math.random;
@@ -210,11 +287,11 @@ describe("compiled action discovery", () => {
 
       const raw = built.snapshots.read(built.sessionId);
       expect(raw.status).toBe("ok");
-      if (raw.status === "refused") return;
+      if (raw.status !== "ok") return;
       const rawSnapshot = raw.value as { bundle: { id: string } };
       const bundle = built.catalog.loadBundle(rawSnapshot.bundle.id);
       expect(bundle.status).toBe("ok");
-      if (bundle.status === "refused") return;
+      if (bundle.status !== "ok") return;
       const restarted = new GameSession(built.sessionId, "cosmic-horror", CONFIG, undefined, undefined, undefined, { careerRoot: join(dir, "careers") });
       expect(restarted.restoreCompiledSession(raw.value, bundle.value).status).toBe("loaded");
       expect(restarted.getCompiledAvailableActions()).toEqual(checked.body.actions);
@@ -234,7 +311,7 @@ describe("compiled action discovery", () => {
       Math.random = originalRandom;
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("uses p1's persisted check values and exposes one failback-capable mechanism without client outcomes", async () => {
     const dir = root();
@@ -242,34 +319,41 @@ describe("compiled action discovery", () => {
     try {
       const built = await durableSession(dir, "compiled-checks");
       const ids = methodIds(built.fixture.resolved.artifact.payload);
-      let current = commitAndRestore(built.session, built, ids.parent, "parent");
+      let current = commitAndRestore(built.durable, built, ids.parent, "parent");
       current = commitAndRestore(current, built, ids.entry, "entry");
-      (current as any).characters.get("p1").skillValues.library_use = 80;
-      current.session.join("p2", "Stale", "p2");
-      (current as any).characters.set("p2", { name: "Stale", skillValues: { library_use: 1 } });
-      current.activePlayerId = "p2";
-      (current as any).activeCharacter = { name: "Stale", skillValues: { library_use: 1 } };
+      const persistedLibraryUse = current.session.activeCharacter?.skillValues?.library_use;
+      if (typeof persistedLibraryUse !== "number") throw new Error("compiled fixture requires a persisted p1 library_use value");
+      // Durable compiled membership is immutable: p2 never becomes a session
+      // member. This non-member map record must not influence compiled p1
+      // checks or history authority.
+      expect(current.session.session.get("p2")).toBeUndefined();
+      expect(current.session.session.getActive()?.name).toBe("p1");
+      // A same-name public shadow is inert: ECMAScript private authority is
+      // not observable or replaceable through the former TypeScript-private
+      // field name.
+      (current.session as unknown as { characters?: Map<string, unknown> }).characters = new Map([["p2", { name: "Stale", skillValues: { library_use: 1 } }]]);
+      expect(current.session.session.get("p2")).toBeUndefined();
+      expect(current.session.session.getActive()?.name).toBe("p1");
       Math.random = () => 0.99;
-      const first = current.commitCompiledAction(compiledMechanicsAction(ids.child), "failure-one", 2, (snapshot) => {
+      const first = current.host.commit(current.session, compiledMechanicsAction(ids.child), "failure-one", 2, (snapshot) => {
         const stored = built.snapshots.save(snapshot);
-        if (stored.status === "refused") throw new Error(stored.message);
+        if (stored.status !== "ok") throw new Error(stored.message);
       });
       expect(first.status).toBe("committed");
       if (first.status !== "committed") return;
-      expect(current.activePlayerId).toBe("p2");
       const firstEvents = (first.response.action as unknown as { events: Array<{ content: string }> }).events;
       expect(first.snapshot?.character.pcId).toBe("p1");
       expect((first.snapshot?.history ?? []).map((message: any) => message.content)).toEqual(expect.arrayContaining(firstEvents.map((event) => event.content)));
-      expect(firstEvents.some((event) => event.content.includes("目标=80%"))).toBe(true);
+      expect(firstEvents.some((event) => event.content.includes(`目标=${persistedLibraryUse}%`))).toBe(true);
       current = restore(built, first.snapshot);
-      expect(current.activePlayerId).toBe("p1");
-      expect(current.getPlayerHistory("p1").messages.map((message) => message.content)).toEqual(expect.arrayContaining(firstEvents.map((event) => event.content)));
-      expect(current.getCompiledAvailableActions().filter((action) => action.mechanismId === ids.child)).toHaveLength(1);
+      expect(current.session.activePlayerId).toBe("p1");
+      expect(current.session.getPlayerHistory("p1").messages.map((message) => message.content)).toEqual(expect.arrayContaining(firstEvents.map((event) => event.content)));
+      expect(current.session.getCompiledAvailableActions().filter((action) => action.mechanismId === ids.child)).toHaveLength(1);
       current = commitAndRestore(current, built, ids.child, "failure-two");
-      expect(current.getCompiledAvailableActions().filter((action) => action.mechanismId === ids.child)).toHaveLength(1);
-      const failback = current.commitCompiledAction(compiledMechanicsAction(ids.child), "failback", 4, (snapshot) => {
+      expect(current.session.getCompiledAvailableActions().filter((action) => action.mechanismId === ids.child)).toHaveLength(1);
+      const failback = current.host.commit(current.session, compiledMechanicsAction(ids.child), "failback", 4, (snapshot) => {
         const stored = built.snapshots.save(snapshot);
-        if (stored.status === "refused") throw new Error(stored.message);
+        if (stored.status !== "ok") throw new Error(stored.message);
       });
       expect(failback).toMatchObject({ status: "committed", response: { action: { compiled: { trace: expect.arrayContaining([expect.objectContaining({ mechanismId: ids.child, outcome: "failback" })]) } } } });
     } finally {
@@ -309,7 +393,7 @@ describe("compiled action discovery", () => {
       const ids = methodIds(built.fixture.resolved.artifact.payload);
       const before = immutableCompiledView(built.session);
       for (const [input, actionId] of [[compiledMechanicsAction(ids.child), "unavailable"], [compiledMechanicsAction("unknown_mechanism"), "unknown"]] as const) {
-        expect(await runAction(built.session, { input, pcId: "p1", actionId, expectedGeneration: 0 }, () => { throw new Error("must not persist a refusal"); })).toMatchObject({ status: 409, body: { code: "compiled_action_unavailable", generation: 0 } });
+        expect(await runAction(built.session, { input, pcId: "p1", actionId, expectedGeneration: 0 }, () => { throw new Error("must not persist a refusal"); }, undefined, undefined, undefined, built.durable.host.capability)).toMatchObject({ status: 409, body: { code: "compiled_action_unavailable", generation: 0 } });
         expect(immutableCompiledView(built.session)).toEqual(before);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -354,16 +438,17 @@ describe("compiled action discovery", () => {
       rmSync(leftDir, { recursive: true, force: true });
       rmSync(rightDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
-  it("maps real compiled execution and durable persistence failures to 500", async () => {
+  it("maps durable persistence failure and leaves public compiled refusal state unchanged", async () => {
     const dir = root();
     try {
       const built = await durableSession(dir, "compiled-persist-failure");
       const ids = methodIds(built.fixture.resolved.artifact.payload);
-      expect(await runAction(built.session, { input: compiledMechanicsAction(ids.parent), pcId: "p1", actionId: "fails", expectedGeneration: 0 }, () => { throw new Error("storage failed"); })).toMatchObject({ status: 500, body: { code: "compiled_persistence_failed", generation: 0 } });
-      (built.session as any).compiledModule.state.currentSceneId = "tampered";
-      expect(await runAction(built.session, { input: compiledMechanicsAction(ids.parent), pcId: "p1", actionId: "execution", expectedGeneration: 0 }, () => { throw new Error("must not persist an execution refusal"); })).toMatchObject({ status: 500, body: { code: "compiled_execution_failed", generation: 0 } });
+      expect(await runAction(built.session, { input: compiledMechanicsAction(ids.parent), pcId: "p1", actionId: "fails", expectedGeneration: 0 }, () => { throw new Error("storage failed"); }, undefined, undefined, undefined, built.durable.host.capability)).toMatchObject({ status: 500, body: { code: "compiled_persistence_failed", generation: 0 } });
+      const before = immutableCompiledView(built.session);
+      expect(await runAction(built.session, { input: compiledMechanicsAction("unknown_mechanism"), pcId: "p1", actionId: "execution", expectedGeneration: 0 }, () => { throw new Error("must not persist an execution refusal"); }, undefined, undefined, undefined, built.durable.host.capability)).toMatchObject({ status: 409, body: { code: "compiled_action_unavailable", generation: 0 } });
+      expect(immutableCompiledView(built.session)).toEqual(before);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

@@ -116,6 +116,28 @@ describe("CoC 瞄准 + 贯穿 + 命中部位", () => {
       const eff = getHitLocationEffect("胸部", 10, true, true);
       expect(eff.secondaryEffect).toBe("持续失血");
     });
+
+    it("只把已有精确执行语义的腹部失能/贯穿、头部昏迷与胸部大出血投影为状态", () => {
+      const incapacitating = getHitLocationEffect("腹部", 6, true, true);
+      expect(incapacitating.secondaryEffect).toBe("眩晕一轮");
+      expect(incapacitating.statusEffect).toBe("incapacitated");
+
+      const unconscious = getHitLocationEffect("头部", 12, true, true);
+      expect(unconscious.secondaryEffect).toBe("即死检定");
+      expect(unconscious.statusEffect).toBe("stunned");
+      expect(unconscious.followUp).toEqual({ kind: "head-critical-con-death" });
+
+      const chestImpale = getHitLocationEffect("胸部", 6, true, false);
+      expect(chestImpale.followUp).toEqual({ kind: "chest-impale-con-incapacitation" });
+
+      const chestCritical = getHitLocationEffect("胸部", 12, true, true);
+      expect(chestCritical.statusEffect).toBe("hemorrhaging");
+
+      const abdominalImpale = getHitLocationEffect("腹部", 6, true, false);
+      expect(abdominalImpale.statusEffect).toBe("abdominal_impaled");
+      expect(abdominalImpale.statusEffectDurationDice).toBe("1d3");
+      expect(chestCritical.followUp).toBeUndefined();
+    });
   });
 
   // ============================================================

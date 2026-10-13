@@ -12,31 +12,26 @@
 
 import { describe, test, expect } from "bun:test";
 import { GameSession } from "../api/game-session";
+import { activateRegisteredGameSessionSceneForTest } from "./helpers/game-session-world-fault";
 
 const CFG = {
   apiKey: "sk-placeholder", baseUrl: "http://localhost:9999",
   model: "mock", maxTokens: 64, temperature: 0,
 };
 
-type S = {
-  setDifficulty: (d: string) => unknown;
-  investigation: { registerSceneClue: (a: string, b: string, c?: string, d?: string) => void };
-  resolveSceneClue: (t: string, m: (x: string) => number) => boolean;
-  sanity: { state: { currentSAN: number } };
-};
-
 /** 钉住骰子，跑一条 1/1d6 的线索，返回实际扣掉的 SAN。 */
 async function sanLossAt(diff: string | null): Promise<number> {
-  const s = new GameSession(`d-${Math.random()}`, "cosmic-horror", CFG);
-  await s.act("创建角色 investigator 甲");
-  const a = s as unknown as S;
-  if (diff) a.setDifficulty(diff);
-  a.investigation.registerSceneClue("tavern", "corpse", "一具尸体", "1/1d6");
-  const before = a.sanity.state.currentSAN;
+  const s = new GameSession(`d-${Math.random()}`, "cosmic-horror", CFG, "investigator", "甲");
+  await s.act("加载模组 普瑞米尔的谷仓");
+  expect(activateRegisteredGameSessionSceneForTest(s, "维修间")).toBe(true);
+  if (diff) s.setDifficulty(diff);
+  const before = s.sanity.state.currentSAN;
   const real = Math.random;
   Math.random = () => 0.999; // 检定失败 + 1d6 掷出 6
-  try { a.resolveSceneClue("corpse", () => 0); } finally { Math.random = real; }
-  return before - a.sanity.state.currentSAN;
+  try {
+    expect((await s.act("查看母女的缸中脑")).error).toBeUndefined();
+  } finally { Math.random = real; }
+  return before - s.sanity.state.currentSAN;
 }
 
 describe("难度要传到调查引擎", () => {
@@ -58,15 +53,14 @@ describe("难度要传到调查引擎", () => {
   }, 20_000);
 
   test("**干扰输入**：不认识的难度名不该改变行为，也不该崩", async () => {
-    const s = new GameSession(`d-${Math.random()}`, "cosmic-horror", CFG);
-    await s.act("创建角色 investigator 甲");
-    const a = s as unknown as S;
-    expect(() => a.setDifficulty("超级困难")).not.toThrow();
-    a.investigation.registerSceneClue("tavern", "corpse", "一具尸体", "1/1d6");
-    const before = a.sanity.state.currentSAN;
+    const s = new GameSession(`d-${Math.random()}`, "cosmic-horror", CFG, "investigator", "甲");
+    await s.act("加载模组 普瑞米尔的谷仓");
+    expect(activateRegisteredGameSessionSceneForTest(s, "维修间")).toBe(true);
+    expect(() => s.setDifficulty("超级困难")).not.toThrow();
+    const before = s.sanity.state.currentSAN;
     const real = Math.random;
     Math.random = () => 0.999;
-    try { a.resolveSceneClue("corpse", () => 0); } finally { Math.random = real; }
-    expect(before - a.sanity.state.currentSAN).toBe(6); // 仍按默认
+    try { expect((await s.act("查看母女的缸中脑")).error).toBeUndefined(); } finally { Math.random = real; }
+    expect(before - s.sanity.state.currentSAN).toBe(6); // 仍按默认
   });
 });

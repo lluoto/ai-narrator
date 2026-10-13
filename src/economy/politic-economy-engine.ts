@@ -14,6 +14,13 @@ import {
   Policy,
   EconomyEvent,
   } from "./types";
+import {
+  POLITICO_ECONOMY_SNAPSHOT_MAX_CAUSATION_IDS,
+  POLITICO_ECONOMY_SNAPSHOT_MAX_ID_LENGTH,
+  POLITICO_ECONOMY_SNAPSHOT_VERSION,
+  validatePoliticoEconomySnapshot,
+} from "./politico-economy-snapshot";
+import type { PoliticoEconomySnapshot } from "./politico-economy-snapshot";
 
 export class PoliticoEconomyEngine {
   readonly factions: FactionSystem;
@@ -187,8 +194,14 @@ export class PoliticoEconomyEngine {
    * `tickEconomy()`——那里是唯一的生产调用方，设计理由写在那边。
    */
   advanceRound(causationId: string): EconomyEvent[] {
+    if (typeof causationId !== "string" || causationId.length === 0 || causationId.length > POLITICO_ECONOMY_SNAPSHOT_MAX_ID_LENGTH) {
+      throw new Error("causationId must be a non-empty bounded string");
+    }
     if (this.consumedCausationIds.has(causationId)) {
       return [];
+    }
+    if (this.consumedCausationIds.size >= POLITICO_ECONOMY_SNAPSHOT_MAX_CAUSATION_IDS) {
+      throw new Error("causationId capacity has been reached");
     }
     this.consumedCausationIds.add(causationId);
 
@@ -207,6 +220,43 @@ export class PoliticoEconomyEngine {
       if (this.events.length > 200) this.events.shift();
     }
     return newEvents;
+  }
+
+  /**
+   * Export every mutable field as a validated, JSON-safe deep copy. The
+   * snapshot deliberately contains no live Maps, Sets, or shared references.
+   */
+  exportSnapshot(): PoliticoEconomySnapshot {
+    const factionSnapshot = this.factions.exportForSnapshot();
+    const snapshot = {
+      version: POLITICO_ECONOMY_SNAPSHOT_VERSION,
+      round: this.round,
+      events: this.events,
+      consumedCausationIds: Array.from(this.consumedCausationIds),
+      factions: factionSnapshot.factions,
+      factionSystem: factionSnapshot.state,
+      trades: this.trades.exportForSnapshot(),
+      policies: this.policies.exportForSnapshot(),
+      finances: this.finances.exportForSnapshot(),
+    };
+    // The round-trip omits absent optional fields exactly as transport JSON
+    // does, before the validator creates the typed deep copy returned here.
+    return validatePoliticoEconomySnapshot(JSON.parse(JSON.stringify(snapshot)) as unknown);
+  }
+
+  /**
+   * Restore a portable snapshot. Validation creates a complete replacement
+   * graph before this method mutates any engine or subsystem field.
+   */
+  restoreSnapshot(snapshot: unknown): void {
+    const restored = validatePoliticoEconomySnapshot(snapshot);
+    this.factions.replaceFromSnapshot(restored.factions, restored.factionSystem);
+    this.trades.replaceFromSnapshot(restored.trades);
+    this.policies.replaceFromSnapshot(restored.policies);
+    this.finances.replaceFromSnapshot(restored.finances);
+    this.events = restored.events;
+    this.round = restored.round;
+    this.consumedCausationIds = new Set(restored.consumedCausationIds);
   }
 
   // ── 状态输出 ──

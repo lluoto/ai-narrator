@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "fs";
-import { buildCompilerQuestionQueue, type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
+import { buildCompilerQuestionQueue, MODULE_COMPILE_HINTS_SCHEMA_VERSION, type CompilerQuestion, type CompilerQuestionResolution, type ModuleCompileHints } from "../compiler/compiler-question-queue";
 import {
   executeCompilerProcessSimulation,
   prepareCompilerProcessSimulation,
@@ -62,11 +62,12 @@ function hints(prepared: PreparedCompilerProcessSimulation): ModuleCompileHints 
   const entryQuestion = queue.questions.find((question) => question.kind === "entry_scene")!;
   const endingQuestion = queue.questions.find((question) => question.kind === "ending_rule")!;
   return {
-    schemaVersion: "1.1.0",
+    schemaVersion: MODULE_COMPILE_HINTS_SCHEMA_VERSION,
     moduleId: queue.moduleId,
     documentHash: queue.documentHash,
     sourceGraphIdentity: queue.sourceGraphIdentity,
     resolutions: [
+      ...queue.questions.filter((question) => question.kind === "clue_fact_facets").map((question) => resolution(question, { shell: (question.allowedClueFactAtoms ?? []).map((atom) => ({ atomId: atom.id, quote: atom.quote })), findings: [], sourceOnlyAtomIds: [] })),
       ...queue.questions.filter((question) => question.kind === "scene_role").map((question) => resolution(question, { role: "playable_scene" })),
       resolution(entryQuestion, { sceneCandidateId: entry.id }),
       resolution(topology(entry.id), { connections: [

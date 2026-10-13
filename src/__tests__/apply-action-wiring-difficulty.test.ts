@@ -28,7 +28,8 @@ beforeEach(() => {
   // HP 必须取自角色卡：闸门读的是角色卡（setPlayerHp 走 characters.get），而断言读的是
   // 世界实体。这里写死常量的话，CoC 建卡按 (CON+SIZ)/10 逐局给出不同 HP，两边就会分叉，
   // 表现为「改动列表为空」——闸门认为你设的值就是当前值。
-  session.world.upsertEntity({
+  session.setPlayerHp(playerId, session.activeCharacter.hp);
+  /*
     id: playerId,
     name: "调查员",
     type: "pc",
@@ -37,7 +38,7 @@ beforeEach(() => {
     ac: 10,
     status: [],
     position: "tavern",
-  });
+  */
 });
 
 describe("setDifficulty through applyAction", () => {

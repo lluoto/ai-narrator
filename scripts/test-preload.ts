@@ -14,7 +14,32 @@
 // 与其等它发生，不如现在就让测试默认跑在干净检出的条件下。
 //
 // 留 `||=` 而不是硬写：想拿真实库复现问题时，`NPC_DB_PATH=data/npc.db` 仍然覆盖得了。
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterAll } from "bun:test";
+
+// A preload runs in its own test-file context. It must not claim to configure
+// a cross-file timeout: whole-suite timing belongs on Bun's CLI and exceptional
+// filesystem fixtures declare their own bounded limit beside the test.
+
 process.env.NPC_DB_PATH ||= ":memory:";
+
+// Keep test-created careers out of the repository. An explicitly supplied root
+// belongs to the caller and is never registered for cleanup here.
+if (process.env.__CAREER_DIR === undefined) {
+  const testCareerRoot = mkdtempSync(join(tmpdir(), "aitrpg-test-careers-"));
+  process.env.__CAREER_DIR = testCareerRoot;
+  let cleaned = false;
+  const cleanupTestCareerRoot = () => {
+    if (cleaned) return;
+    cleaned = true;
+    try { rmSync(testCareerRoot, { recursive: true, force: true }); } catch { /* best effort during process exit */ }
+  };
+  // `afterAll` covers Bun test workers; `exit` remains the synchronous last-resort cleanup.
+  afterAll(cleanupTestCareerRoot);
+  process.once("exit", cleanupTestCareerRoot);
+}
 
 // ── 测试默认不读取工作站世界模型 ──
 //
