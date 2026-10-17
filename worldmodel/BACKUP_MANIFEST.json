@@ -1,11 +1,21 @@
 {
   "schema_version": 1,
-  "description": "Partial worldmodel source, policy, and prompt backup. Hashes are SHA-256 values of source bytes.",
+  "description": "Partial worldmodel source code, synthetic tests, policies, prompts, and metadata-only audit backup. Hashes are SHA-256 values of original source bytes.",
   "files": [
     {
-      "path": "worker_config.json",
-      "original_worldmodel_relative_path": "worker_config.json",
-      "sha256": "b892fc1a6cf9b26b3d14634c0d2da6f7f0dfd1eaf5f42ec8876b108ec0410757"
+      "path": "LEAD_MODEL_REVIEW_DOSSIER_CONTRACT.md",
+      "original_worldmodel_relative_path": "LEAD_MODEL_REVIEW_DOSSIER_CONTRACT.md",
+      "sha256": "0defe75132df85dff00dc9b80b2f6d1a7b0cd9c240a6ddd11e163a2624c0031b"
+    },
+    {
+      "path": "MULTI_MODEL_REVIEW_UPGRADE.md",
+      "original_worldmodel_relative_path": "MULTI_MODEL_REVIEW_UPGRADE.md",
+      "sha256": "6a60fda06e02404cd5fe08b8bafb3b7717f3a3263c76162e2b7e296181665192"
+    },
+    {
+      "path": "PROPOSITION_ANNOTATION_CONTRACT.md",
+      "original_worldmodel_relative_path": "PROPOSITION_ANNOTATION_CONTRACT.md",
+      "sha256": "9b2afe79d8f3aed47700771292850aede27be96fc8eaca3cd96fe8fc9b87f925"
     },
     {
       "path": "QWEN_TASK_ROUTING_POLICY.md",
@@ -13,14 +23,24 @@
       "sha256": "669d8de4e4d6bf9521fb1ee1486b25d0cecf0ce840c235e5ef3ac3d65a2a50a0"
     },
     {
-      "path": "tools/proposition_canary_run.py",
-      "original_worldmodel_relative_path": "tools/proposition_canary_run.py",
-      "sha256": "34ab39267ee9ee694973ff9ae0b116bf02f6eb4c3099a2d89b30ade2030bb5af"
+      "path": "ROUTE_AGENT_AUTOMATION_POLICY.md",
+      "original_worldmodel_relative_path": "ROUTE_AGENT_AUTOMATION_POLICY.md",
+      "sha256": "6dd94a9ed4c6cb71b565c9e7000a937d585239b1d4d006b7b70385c3016e9116"
     },
     {
-      "path": "runs/_extraction_scheduler/20260924/run_wavea_canary_batch.py",
-      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/run_wavea_canary_batch.py",
-      "sha256": "27d87dda14f404e635a433fd8f0a64ce78bd8f58b241444155b39f125c37eae1"
+      "path": "runs/_extraction_scheduler/20260924/duplicate_sentence_id_audit_v1/report.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/duplicate_sentence_id_audit_v1/report.md",
+      "sha256": "9857daf18494e48fa0058f2a4bf02cf33f6b8744e74c2e5e7e5b1b29015062d9"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/generation_followup_inventory_v3/report.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/generation_followup_inventory_v3/report.md",
+      "sha256": "36f2fdfb0fbf6cb9e1453896d0214c362a19ac93e3289f4a1f83b6545a123897"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_8000_generation_followup_inventory_v2.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_8000_generation_followup_inventory_v2.md",
+      "sha256": "67dfb473f778f477a40675957acea6ffdafaec1f5c553ee44f1367b4bb4d571f"
     },
     {
       "path": "runs/_extraction_scheduler/20260924/handoff_8000_phase_a_structured_proposal_batch.md",
@@ -28,9 +48,39 @@
       "sha256": "903a70814da5a703d578223708cad22493dac971861d0c03baca500223b6b368"
     },
     {
+      "path": "runs/_extraction_scheduler/20260924/handoff_card_reverify_offline_preparation.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_card_reverify_offline_preparation.md",
+      "sha256": "9c7d7af9b75f99507ececed4def37aa55079f3fcbf837bc37112e177a4022713"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_continue_luna_after_shard1.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_continue_luna_after_shard1.md",
+      "sha256": "ad7e84488197791f4bd07cf0da36b1c9d9b23e1fee61e8a83baad859ac12dd94"
+    },
+    {
       "path": "runs/_extraction_scheduler/20260924/handoff_dual_endpoint_prompt_contract_20261010.md",
       "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_dual_endpoint_prompt_contract_20261010.md",
       "sha256": "00c116fd3020f334affba0a6a316599c1c8f3f3655fba71a01275091510f20dd"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_execute_luna_conflict_review_v1.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_execute_luna_conflict_review_v1.md",
+      "sha256": "991398f1bbc5c70d075f3002f9118e475f1eda7ca42bd55c325831ce4343153a"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_generator_span_blocker_literal_v2.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_generator_span_blocker_literal_v2.md",
+      "sha256": "c61f58b01c378867783df7cb7ab354743f05689fe68de2f7fc08cb6effd686e7"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_literal_fivecase_corrective_preparation.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_literal_fivecase_corrective_preparation.md",
+      "sha256": "1b6da1bf15d951e61108fef4f0f71a01725b9996ef3f5ea05b9c7712bf8d623c"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/handoff_qwen_acceptance_v2_validation.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_qwen_acceptance_v2_validation.md",
+      "sha256": "4c7aa8f198186bfcbbc906c9ef36196e88f17b8893d5df62a298a7ffe3c6f04f"
     },
     {
       "path": "runs/_extraction_scheduler/20260924/handoff_rare_route_delegated_baseline_prompt.md",
@@ -38,9 +88,174 @@
       "sha256": "3082d8e04f589c685f3ed9028bc9b41227dc48c53f2d3e12e2f2e0d1977f9e39"
     },
     {
+      "path": "runs/_extraction_scheduler/20260924/handoff_round1_bulk_discovery_gpt6_luna.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/handoff_round1_bulk_discovery_gpt6_luna.md",
+      "sha256": "3bc446d9f0544d8a9285f774dcf759d25e175e166a712586d572ac36cc590c90"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/BOUND_LITERAL_EXPERIMENT.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/BOUND_LITERAL_EXPERIMENT.md",
+      "sha256": "3f65a986e55e274cb7e299aca6bf02afc762300eecfecc7f932f7af8a6d80e89"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/CARD_REVERIFY_PREPARATION.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/CARD_REVERIFY_PREPARATION.md",
+      "sha256": "5d7bbda5e17cd9b6b52127b5ba9584f829ce667e9fcfc36201b1241e0f1ea1ae"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/COMPACT_VERIFIER_DESIGN.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/COMPACT_VERIFIER_DESIGN.md",
+      "sha256": "2e877c1db6fbbe1d0d4c2c3752684f33966b885b3a7d0fed3a0f9208948c6325"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/COMPACT_VERIFIER_IMPLEMENTATION.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/COMPACT_VERIFIER_IMPLEMENTATION.md",
+      "sha256": "9464eb9ec5ba8bdcb3c68b0c29377bfcf3a802180b33449537f0cf0370d6dc5f"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/EFFECTIVE_SELECTION_CONTRACT.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/EFFECTIVE_SELECTION_CONTRACT.md",
+      "sha256": "434d75264b1fe7fec0e10e292460304cba596b12a46983d73d5278e65b6420b5"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/INFERENCE_EFFICIENCY_REPORT.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/INFERENCE_EFFICIENCY_REPORT.md",
+      "sha256": "2ce925619baf7b425f7a2f545bfe326625fbc153abb00b1a17acfbbafc33a0bc"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/INTEGRATION_READINESS.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/INTEGRATION_READINESS.md",
+      "sha256": "bda1c4de3c72b6d0465082833688323a5aec2aecfa73a6be3af6509413ab4e80"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/LITERAL_EVIDENCE_CONTRACT.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/LITERAL_EVIDENCE_CONTRACT.md",
+      "sha256": "735ccaec9c3284f0af35e06edf94ecfab048227fce3e72f5635c595e4f1e15b3"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/LITERAL_EXPERIMENT_HANDOFF.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/LITERAL_EXPERIMENT_HANDOFF.md",
+      "sha256": "265a4bb6f3834a733e5cfd79f9aa9278a67e685899b8d7f5380506df03a35e02"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/LUNA_FINAL_CHECKPOINT_DISPOSITION.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/LUNA_FINAL_CHECKPOINT_DISPOSITION.md",
+      "sha256": "1b1fb25a63dc6486528d151b2479565b10c7ec04ad94b73b6b2a28fc16157f23"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/luna_final_offline_review_v1/report.json",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/luna_final_offline_review_v1/report.json",
+      "sha256": "ff75fc745b87fca63b53e42bf49ab01dc09a145c3f329882920d80d3552484e3"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/luna_final_offline_review_v1/report.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/luna_final_offline_review_v1/report.md",
+      "sha256": "44c30e74cf371f7eb68d8fa778a70c92835b6393aa9edd524f175bf21b5b1c00"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/luna_first_shard_offline_review_v1/report.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/luna_first_shard_offline_review_v1/report.md",
+      "sha256": "2ddbd8f9171754fb784c0e4c529669a04670f04a752bf952179483edeeaaa8be"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/NO_QWEN_TASKS_QUEUE_WAIT.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/NO_QWEN_TASKS_QUEUE_WAIT.md",
+      "sha256": "afbc591bd0b086c1a6cffff788f555b5806af7f4133068994012d3f3e01aae03"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/OFFLINE_OPTIMIZATION_STATUS.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/OFFLINE_OPTIMIZATION_STATUS.md",
+      "sha256": "42658becb8e03ac51bcd8b01528d6f9be298ff1702716b3c89ebc14d893f544d"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/OFFLINE_POSTFLIGHT_FOLLOWUP.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/OFFLINE_POSTFLIGHT_FOLLOWUP.md",
+      "sha256": "a4e6d718e3c359f4922f7cb6647df9517bb9f1ec700f87a1f0a75cab19df2504"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/REPAIR_IMPLEMENTATION.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/REPAIR_IMPLEMENTATION.md",
+      "sha256": "07c0f4506530142d8cba36a6b4691fa910fa6d72108f5e257981f850fe430e30"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/report.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/report.md",
+      "sha256": "61a21fb314ed32110ea9c8a1886c40a8ab053ce983a8fbabcbe0dd3dfb37c16e"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/RUNNER_FINDINGS.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/RUNNER_FINDINGS.md",
+      "sha256": "8167f39b5e5a7b6d1858699f92af45b2bc37419c4c48ea76640070bfda6fa6d2"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/SEQUENTIAL_RELEASE_PROTOCOL.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/SEQUENTIAL_RELEASE_PROTOCOL.md",
+      "sha256": "ab2ffdca8b2a1309593fc0c1ea309c5f93d9e3dcfd4b7a3eac055b648fd63c81"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/SOURCE_RESOLUTION_APPROVED_STATUS.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/SOURCE_RESOLUTION_APPROVED_STATUS.md",
+      "sha256": "442fea1eb14c430e6055c1cdc5c0b48e4eeea6d439e74b9fee1ee985c838ef11"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/SOURCE_RESOLUTION_DECISION_REQUEST.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/SOURCE_RESOLUTION_DECISION_REQUEST.md",
+      "sha256": "a9db8e15bf1555febc0f86787bc795236d6fb9c97b5fc6efde6ab46f86f155ed"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/STAGE2_SMOKE_EXECUTION_ADDENDUM.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/production_round1_audit_20261015/STAGE2_SMOKE_EXECUTION_ADDENDUM.md",
+      "sha256": "b3b9edaaaa5abdca64c7c81f315401cbe4ca2efe6c430060f48e39a6e62c1174"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/proposition_canary_prompts/proposition_generator_prompt_v1.txt",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/proposition_canary_prompts/proposition_generator_prompt_v1.txt",
+      "sha256": "3f15ab1cb76e518f15fb4e647d25a4fc6ac83ba699a739800d88375e61e91e83"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/proposition_canary_prompts/proposition_generator_prompt_v2_literal_evidence.txt",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/proposition_canary_prompts/proposition_generator_prompt_v2_literal_evidence.txt",
+      "sha256": "a4fd5362df61b852e30ac699a7654ee055bf27c16fb8eee43f12b594d2caf970"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/proposition_canary_prompts/proposition_verifier_prompt_v3_acceptance_contract_2.txt",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/proposition_canary_prompts/proposition_verifier_prompt_v3_acceptance_contract_2.txt",
+      "sha256": "88eca738a372498473428e9b047de988be73358709d64f2b0aeaf0413315ad11"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/proposition_canary_prompts/proposition_verifier_prompt_v4_compact_experiment.txt",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/proposition_canary_prompts/proposition_verifier_prompt_v4_compact_experiment.txt",
+      "sha256": "cb532c0567c05c975d5c11af81f2205489eaef07fbed3ea214a67b6b547757d8"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/QWEN_TASK_ROUTING_POLICY.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/QWEN_TASK_ROUTING_POLICY.md",
+      "sha256": "669d8de4e4d6bf9521fb1ee1486b25d0cecf0ce840c235e5ef3ac3d65a2a50a0"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/run_reverify_8001.py",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/run_reverify_8001.py",
+      "sha256": "0c02ef2f1f47a53748b278a6c9348b65fb5222a6c80e9ae89dbbdd405cfac32c"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/run_wavea_canary_batch.py",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/run_wavea_canary_batch.py",
+      "sha256": "305bc0db7559109d50164a9db11520c1a13a571ab2eda730faeb131a921fd0d5"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/run_wavea_supervisor.sh",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/run_wavea_supervisor.sh",
+      "sha256": "f63844bbe946c0abd4b1263d470576d5b220b393f2a34ab2586cb0587cbe6823"
+    },
+    {
       "path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_regression_8000/bounded_event_slot_prompt_v6.txt",
       "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_regression_8000/bounded_event_slot_prompt_v6.txt",
       "sha256": "153a9691a1609a74125c92a28234a4b1ab73c3721ea09e27293acf454bd8b719"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/job_record.json",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/job_record.json",
+      "sha256": "105f5d3163758db5715fcc8bda86fe630c3eceef3ea6a30fbf97346238abff41"
     },
     {
       "path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/report.md",
@@ -48,18 +263,300 @@
       "sha256": "db355ca00d8e6c62a2d771a01725574d847e4489b9c40d5a6f0a34380b7a0908"
     },
     {
-      "path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/job_record.json",
-      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/slot_pilot_v6_smoke_8000_structured_source/job_record.json",
-      "sha256": "105f5d3163758db5715fcc8bda86fe630c3eceef3ea6a30fbf97346238abff41"
+      "path": "runs/_extraction_scheduler/20260924/source_identity_bindings_approved_v1/README.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/source_identity_bindings_approved_v1/README.md",
+      "sha256": "faae9ded8c4b929723c9f55c9a89c6c7cee8135ac1cb3827341d58cf00ba14ea"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/source_identity_bindings_approved_v1/report.json",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/source_identity_bindings_approved_v1/report.json",
+      "sha256": "7b8cd25b1c9bf54f5811a53e4eecd4a3c35a0d5e16dad46289b4dc85b22ec008"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/source_namespace_binding_audit_v2/report.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/source_namespace_binding_audit_v2/report.md",
+      "sha256": "0a5bf0c895439f3d61839f2fec48ade4c14843bd7899eefc08831567ad39c8ab"
+    },
+    {
+      "path": "runs/_extraction_scheduler/20260924/verifier_followup_inventory_v2/report.md",
+      "original_worldmodel_relative_path": "runs/_extraction_scheduler/20260924/verifier_followup_inventory_v2/report.md",
+      "sha256": "1796715ddbf48b381217213cfcdb9f52f44439682ca6b286c428954255df258c"
+    },
+    {
+      "path": "SOURCE_PROPOSITION_PIPELINE.md",
+      "original_worldmodel_relative_path": "SOURCE_PROPOSITION_PIPELINE.md",
+      "sha256": "5e553196cc38a8f791801898590b045f6fe11783a71c8cf1b883fa39c8c9a349"
+    },
+    {
+      "path": "SOURCE_PROPOSITION_RECORD_SCHEMA.md",
+      "original_worldmodel_relative_path": "SOURCE_PROPOSITION_RECORD_SCHEMA.md",
+      "sha256": "8fab9909c0cdfeae65c98e18533b2d3f0a029100587104f5c9c5940aab6fa5c8"
+    },
+    {
+      "path": "tests/test_approved_source_identity.py",
+      "original_worldmodel_relative_path": "tests/test_approved_source_identity.py",
+      "sha256": "67f1f5aed6ce13721141dd93f51030c59b2ad84f063c87427a6c5c7394d2fd79"
+    },
+    {
+      "path": "tests/test_bound_literal_experiment.py",
+      "original_worldmodel_relative_path": "tests/test_bound_literal_experiment.py",
+      "sha256": "c7cdcc80715161965270af624e55c77a22b55fb79b48aea4ed16980a49040608"
+    },
+    {
+      "path": "tests/test_card_reverify_preparation.py",
+      "original_worldmodel_relative_path": "tests/test_card_reverify_preparation.py",
+      "sha256": "c35b0ea013797a088d15460992e94cec237d3825c09c381797675afbf028bbc7"
+    },
+    {
+      "path": "tests/test_duplicate_sentence_ids.py",
+      "original_worldmodel_relative_path": "tests/test_duplicate_sentence_ids.py",
+      "sha256": "ff8367f3cde2dcdc7321cc3c3fb62f6f0c05f4bce2106158ac24b4a5ec3424dc"
+    },
+    {
+      "path": "tests/test_effective_verification.py",
+      "original_worldmodel_relative_path": "tests/test_effective_verification.py",
+      "sha256": "4bfb75390065a21c0623e61babba2341852f39f0b31a756a17249e94974445cb"
+    },
+    {
+      "path": "tests/test_generation_followup_inventory_v2.py",
+      "original_worldmodel_relative_path": "tests/test_generation_followup_inventory_v2.py",
+      "sha256": "3738dca01dcb8dd65398cf55a2e2e36c51d4d26a79d1e9f87e85d64b5776c338"
+    },
+    {
+      "path": "tests/test_generation_followup_inventory_v3.py",
+      "original_worldmodel_relative_path": "tests/test_generation_followup_inventory_v3.py",
+      "sha256": "26a87d19e663e752d07df6b16f2fd13c697f73a03a3fb8f051bbdde04805cb9d"
+    },
+    {
+      "path": "tests/test_generation_followup_inventory.py",
+      "original_worldmodel_relative_path": "tests/test_generation_followup_inventory.py",
+      "sha256": "298b3ede27610e6da4fb6763910ff4978c8a6077717f8323fcd5a2bd77a1381f"
+    },
+    {
+      "path": "tests/test_literal_experiment.py",
+      "original_worldmodel_relative_path": "tests/test_literal_experiment.py",
+      "sha256": "b8be85823bef1ad2f23f6fc9ac1f7d8d14edafb20edbf0d8798b3f3d15db1ac8"
+    },
+    {
+      "path": "tests/test_literal_sequential_release.py",
+      "original_worldmodel_relative_path": "tests/test_literal_sequential_release.py",
+      "sha256": "75195b0470191d57a0d375d6db826419ff4ec3c88efe2db573c72b4516ad9f79"
+    },
+    {
+      "path": "tests/test_luna_conflict_review.py",
+      "original_worldmodel_relative_path": "tests/test_luna_conflict_review.py",
+      "sha256": "40f182066550845dab12d668dbd62262d2bb50fe625248857a7d00f60855afd7"
+    },
+    {
+      "path": "tests/test_luna_review_identity_v2.py",
+      "original_worldmodel_relative_path": "tests/test_luna_review_identity_v2.py",
+      "sha256": "71bc192f8bb7b7cadfcbf966942a7daf709a787f875f9ac960bb324e3e96f2cb"
+    },
+    {
+      "path": "tests/test_materialize_deduplicated_source.py",
+      "original_worldmodel_relative_path": "tests/test_materialize_deduplicated_source.py",
+      "sha256": "3a90d68fc4d40a528a603c978d54d8dd83886922d9610a3b6f951597260c5a1f"
+    },
+    {
+      "path": "tests/test_offline_unittest_launcher.py",
+      "original_worldmodel_relative_path": "tests/test_offline_unittest_launcher.py",
+      "sha256": "c5ec52949dff486046e44fe7772b880145555cfad1d2ea76b522b7c49f222119"
+    },
+    {
+      "path": "tests/test_proposition_attempts.py",
+      "original_worldmodel_relative_path": "tests/test_proposition_attempts.py",
+      "sha256": "74ed78f1aefc0d376bdd1c1e4ac7172a9d130d798393a86295f668aa725f63f6"
+    },
+    {
+      "path": "tests/test_proposition_canary_contract.py",
+      "original_worldmodel_relative_path": "tests/test_proposition_canary_contract.py",
+      "sha256": "584b94af1a34c6f6badcb3fdec7625c2c2058edbdcb49fdb73b2f4cd2ec1745b"
+    },
+    {
+      "path": "tests/test_proposition_canary_runner.py",
+      "original_worldmodel_relative_path": "tests/test_proposition_canary_runner.py",
+      "sha256": "2a1ee925689ab323d9a4029c256a3d6218cb010f2b197ec44995c9f2ee13fee2"
+    },
+    {
+      "path": "tests/test_proposition_compact_verifier.py",
+      "original_worldmodel_relative_path": "tests/test_proposition_compact_verifier.py",
+      "sha256": "14b216c5533a3c4ad9279abff9a0678b27ee334b1a6fccbacb33c721c1026d2e"
+    },
+    {
+      "path": "tests/test_proposition_efficiency.py",
+      "original_worldmodel_relative_path": "tests/test_proposition_efficiency.py",
+      "sha256": "a624d94ea8a69a467e75f2b44406670d412f6677aacba75194334ae7eace942d"
+    },
+    {
+      "path": "tests/test_proposition_literal_evidence.py",
+      "original_worldmodel_relative_path": "tests/test_proposition_literal_evidence.py",
+      "sha256": "efa676aff594555c163ac94e98b11a0fb4ccd2a99a7fad0255d95e52754f6684"
+    },
+    {
+      "path": "tests/test_proposition_postflight.py",
+      "original_worldmodel_relative_path": "tests/test_proposition_postflight.py",
+      "sha256": "7239ca079eff6f7c09350e4c8c9ea601878eda4dd562d2cef9ccb128b794c719"
+    },
+    {
+      "path": "tests/test_source_namespace_bindings_v2.py",
+      "original_worldmodel_relative_path": "tests/test_source_namespace_bindings_v2.py",
+      "sha256": "7a2c431e557af925ab04abb92971fde85dd85a0ab14866665350394638461b6d"
+    },
+    {
+      "path": "tests/test_source_namespace_bindings.py",
+      "original_worldmodel_relative_path": "tests/test_source_namespace_bindings.py",
+      "sha256": "d679e8fd0d0a1dbe545e43e8d16f268603a28508977ec986b19adb2c145c422d"
+    },
+    {
+      "path": "tests/test_verifier_followup_inventory_v2.py",
+      "original_worldmodel_relative_path": "tests/test_verifier_followup_inventory_v2.py",
+      "sha256": "f0f6de930d250ed448ddabc28b11e2997f300c5fe6fcb642665194bfb99f7893"
+    },
+    {
+      "path": "tests/test_verifier_followup_inventory.py",
+      "original_worldmodel_relative_path": "tests/test_verifier_followup_inventory.py",
+      "sha256": "ef9432284f7ca962bd42b13960da66b8f692bd1b1072f237732925361b55b5de"
+    },
+    {
+      "path": "tools/approved_source_identity.py",
+      "original_worldmodel_relative_path": "tools/approved_source_identity.py",
+      "sha256": "966da73c4608de70de09aee419cf2b220dbd8bbb346c222a379da39d65508cef"
+    },
+    {
+      "path": "tools/audit_duplicate_sentence_ids.py",
+      "original_worldmodel_relative_path": "tools/audit_duplicate_sentence_ids.py",
+      "sha256": "2c44912844baaeec610dfc8d0a75a56b46ac8e33f9921d6a649a17c6ec7521b3"
+    },
+    {
+      "path": "tools/audit_source_namespace_bindings_v2.py",
+      "original_worldmodel_relative_path": "tools/audit_source_namespace_bindings_v2.py",
+      "sha256": "9eb1791a9831dd34c330f734605e398b46277a339a59882b8f37c0c91c000436"
+    },
+    {
+      "path": "tools/audit_source_namespace_bindings.py",
+      "original_worldmodel_relative_path": "tools/audit_source_namespace_bindings.py",
+      "sha256": "0f2a0e223e5e495131ea26837033eb233f06d96c27dacb8d23eb93c95d26edf9"
+    },
+    {
+      "path": "tools/build_generation_followup_inventory_v2.py",
+      "original_worldmodel_relative_path": "tools/build_generation_followup_inventory_v2.py",
+      "sha256": "7a0090ce93af626cf026956350099c1a8a5362699a1827ce66273d48d6dcbddb"
+    },
+    {
+      "path": "tools/build_generation_followup_inventory_v3.py",
+      "original_worldmodel_relative_path": "tools/build_generation_followup_inventory_v3.py",
+      "sha256": "627990fc2e81f3d13d35e7eab5448f0fd9b9792d33715879c581239d40d8f5d2"
+    },
+    {
+      "path": "tools/build_generation_followup_inventory.py",
+      "original_worldmodel_relative_path": "tools/build_generation_followup_inventory.py",
+      "sha256": "18557689f7f172f89ddfa702ce8f68b5e0e29981ac87843842ecdcff6bee9758"
+    },
+    {
+      "path": "tools/build_verifier_followup_inventory_v2.py",
+      "original_worldmodel_relative_path": "tools/build_verifier_followup_inventory_v2.py",
+      "sha256": "0afea1de50c92ec3da8cc3f7319bfe6dcb68b84bc468694dad47c58fdedce991"
+    },
+    {
+      "path": "tools/build_verifier_followup_inventory.py",
+      "original_worldmodel_relative_path": "tools/build_verifier_followup_inventory.py",
+      "sha256": "19e25d96268fae63c52c503a12da0a87f5eb06785e3cf743a7b608a4c499f66d"
+    },
+    {
+      "path": "tools/inspect_proposition_attempt.py",
+      "original_worldmodel_relative_path": "tools/inspect_proposition_attempt.py",
+      "sha256": "42aed429fd4969e2e48d61d954142fb1702e7d33af7a3fc1da0a90ac0cc972df"
+    },
+    {
+      "path": "tools/literal_sequential_release.py",
+      "original_worldmodel_relative_path": "tools/literal_sequential_release.py",
+      "sha256": "8a0992d54863c29d66507a76f5c035812e4e1634a97a9d078cecc79dbe7df3cc"
+    },
+    {
+      "path": "tools/luna_review_identity_v2.py",
+      "original_worldmodel_relative_path": "tools/luna_review_identity_v2.py",
+      "sha256": "cbf029dd89645098a594f14d0edb6c6670b180f6dd4f8056ab800b4522ba39a2"
+    },
+    {
+      "path": "tools/materialize_deduplicated_source.py",
+      "original_worldmodel_relative_path": "tools/materialize_deduplicated_source.py",
+      "sha256": "c7d47cf07107d6e14bc17a843239d9a5da536e919529eef92cb0708be0384601"
+    },
+    {
+      "path": "tools/prepare_bound_literal_experiment.py",
+      "original_worldmodel_relative_path": "tools/prepare_bound_literal_experiment.py",
+      "sha256": "8ff74aeac56b4ac422e6745fc51b60d241fc658c12f01744195af1f38e4e54df"
+    },
+    {
+      "path": "tools/prepare_card_reverify.py",
+      "original_worldmodel_relative_path": "tools/prepare_card_reverify.py",
+      "sha256": "e67f911c22cf02784768af962d8e104426780dd555b9338c3006658c45435773"
+    },
+    {
+      "path": "tools/prepare_literal_experiment_v2.py",
+      "original_worldmodel_relative_path": "tools/prepare_literal_experiment_v2.py",
+      "sha256": "76d49383a2b4d6312bbd98c9c127399b57ff2f702903d350bb453e40e97f2ce5"
+    },
+    {
+      "path": "tools/prepare_literal_experiment.py",
+      "original_worldmodel_relative_path": "tools/prepare_literal_experiment.py",
+      "sha256": "5896cc4f7ee13e7edf007480237843d0b194cab1853bac729b2081641022aff9"
+    },
+    {
+      "path": "tools/prepare_luna_conflict_review.py",
+      "original_worldmodel_relative_path": "tools/prepare_luna_conflict_review.py",
+      "sha256": "6dc20e4010482e504a7289c740241c78d3b65ba5f2b55f864494cf3ffee7c4a6"
+    },
+    {
+      "path": "tools/proposition_attempts.py",
+      "original_worldmodel_relative_path": "tools/proposition_attempts.py",
+      "sha256": "84c582b532ecbe1cf1775136e75df9b05b34114d235f92058a6b83e2dc7be26d"
+    },
+    {
+      "path": "tools/proposition_canary_run.py",
+      "original_worldmodel_relative_path": "tools/proposition_canary_run.py",
+      "sha256": "1813ee9a2504deea820962562691b2ff73e502bdd010dac92be1e8e2d62b72b6"
+    },
+    {
+      "path": "tools/proposition_compact_verifier.py",
+      "original_worldmodel_relative_path": "tools/proposition_compact_verifier.py",
+      "sha256": "e6bc283e1cb1464a6b78a92ed89ea1a1af754a0ce057e4e4bd1fabb5384a89a9"
+    },
+    {
+      "path": "tools/proposition_literal_evidence.py",
+      "original_worldmodel_relative_path": "tools/proposition_literal_evidence.py",
+      "sha256": "56b0c61854896bebd458b12540654a2b069df6ae8ac719053f92f17b97e44705"
+    },
+    {
+      "path": "tools/report_proposition_efficiency.py",
+      "original_worldmodel_relative_path": "tools/report_proposition_efficiency.py",
+      "sha256": "14510d6eb0d8fecf5c0c298ea5caaf5022565b2d3399ee2f2bdb5ec24c4022ba"
+    },
+    {
+      "path": "tools/run_offline_unittests.py",
+      "original_worldmodel_relative_path": "tools/run_offline_unittests.py",
+      "sha256": "c183ef486bb09d42851fbe47f9832d1f997db701291f04364dfe1bc0b0c5c5e4"
+    },
+    {
+      "path": "tools/select_effective_verification.py",
+      "original_worldmodel_relative_path": "tools/select_effective_verification.py",
+      "sha256": "78270d7233503257a251085a16334e314f049c4993b9af317303b604ba94e76d"
+    },
+    {
+      "path": "worker_config.json",
+      "original_worldmodel_relative_path": "worker_config.json",
+      "sha256": "b892fc1a6cf9b26b3d14634c0d2da6f7f0dfd1eaf5f42ec8876b108ec0410757"
     }
   ],
   "exclusions": [
     "novels",
     "raw source corpus",
+    "source-bearing Luna packets and verdicts",
     "coverage partitions",
     "raw completions",
-    "route queue outputs",
+    "derived source files and occurrence lineage",
+    "route and reference queue outputs",
     "reviewed receipts",
-    "binding indexes"
+    "approved binding indexes"
   ]
 }

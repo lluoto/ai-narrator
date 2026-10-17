@@ -1,0 +1,50 @@
+{
+  "approval_meaning": "New data identity declaration only; not human source review or historical mapping proof.",
+  "approved_source_bytes": 3968652830,
+  "approved_source_files": 83,
+  "approved_source_rows": 5291274,
+  "authorization": {
+    "bytes": 2513,
+    "path": "authorization.json",
+    "sha256": "62eb2048cd59189adf9e0e20610c44a30aa1e78671bbf1a06d28c7ad199f15c4"
+  },
+  "boundaries": {
+    "automatic_regeneration": false,
+    "dispatch_authorized": false,
+    "generation_output_created": false,
+    "global_B001_alias": false,
+    "historical_mapping_recovered": false,
+    "human_gold": false,
+    "human_source_review_claimed": false,
+    "model_calls": 0,
+    "network_calls": 0,
+    "new_source_snapshot_created": false,
+    "publication_authorized": false,
+    "runtime_rules_changed": false,
+    "source_rows_unmodified": true,
+    "strict_core_modified": false,
+    "tier_changed": false
+  },
+  "counts": {
+    "approved_bindings": 83,
+    "approved_works": 83,
+    "covered_deferred_windows": 2186,
+    "excluded_deferred_windows": 47,
+    "excluded_works": 1
+  },
+  "derived_source_policy": "A derived/deduplicated hash requires a separate authorization; no fallback.",
+  "excluded": [
+    {
+      "deferred_window_count": 47,
+      "named_work_id": "\u7f51\u6e38\u4e4b\u5c04\u7834\u82cd\u7a79",
+      "source": {
+        "bytes": 69550897,
+        "path": "D:/aitrpg/\u4e16\u754c\u6a21\u578b/worldmodel/runs/\u7f51\u6e38\u4e4b\u5c04\u7834\u82cd\u7a79/source_index_round1/sentences_clean_v1.jsonl",
+        "sha256": "d33080a35bd8a0a07b6a497079b475f289af6cecafbb269d1b71e6930ae6fdbd"
+      },
+      "status": "unresolved"
+    }
+  ],
+  "schema": "approved_source_identity.v1.report",
+  "source_verification_policy": "full_file_sha256_and_stable_metadata_before_output_and_final_rehash"
+}

@@ -1,0 +1,12 @@
+# Include this scoped source backup despite the repository-wide tools/ rule.
+!tools/
+!tools/**
+__pycache__/
+*.pyc
+*.pyo
+*.bin
+*.sqlite
+*.db
+source_packets/
+raw_captures/
+corpus/
